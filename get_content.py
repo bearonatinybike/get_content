@@ -8,7 +8,6 @@ Search piratebay.party for torrents.
 """
 
 import argparse
-import base64
 import json
 import math
 import re
@@ -37,10 +36,6 @@ RESOLUTION_SCORES = {
     "1080p": 60,
     "720p": 20,
 }
-SUSPICIOUS_EXTS = frozenset({
-    ".exe", ".dll", ".bat", ".cmd", ".com", ".scr",
-    ".vbs", ".js", ".ps1", ".msi", ".jar", ".pif", ".lnk",
-})
 # Uploaders with an established track record on piratebay.party; suppress
 # the spaces-in-name heuristic for these since they legitimately use spaces.
 TRUSTED_UPLOADERS = frozenset({
@@ -300,102 +295,6 @@ def _drop_stale_episodes(
     return {k: v for k, v in episodes.items() if k in keep} | unknown
 
 
-# ---------------------------------------------------------------------------
-# Torrent inspection (fetch .torrent and scan file list for malware)
-# ---------------------------------------------------------------------------
-
-def _bencode_decode(data: bytes, pos: int = 0):
-    """Minimal bencode decoder. Returns (value, new_pos)."""
-    ch = data[pos:pos+1]
-    if ch == b"i":
-        end = data.index(b"e", pos + 1)
-        return int(data[pos+1:end]), end + 1
-    if ch == b"l":
-        pos += 1
-        lst = []
-        while data[pos:pos+1] != b"e":
-            val, pos = _bencode_decode(data, pos)
-            lst.append(val)
-        return lst, pos + 1
-    if ch == b"d":
-        pos += 1
-        d = {}
-        while data[pos:pos+1] != b"e":
-            key, pos = _bencode_decode(data, pos)
-            val, pos = _bencode_decode(data, pos)
-            d[key] = val
-        return d, pos + 1
-    # byte string: "<length>:<data>"
-    colon = data.index(b":", pos)
-    length = int(data[pos:colon])
-    start = colon + 1
-    return data[start:start+length], start + length
-
-
-def _magnet_to_hex_hash(magnet: str) -> str | None:
-    m = re.search(r"urn:btih:([a-fA-F0-9]{40}|[A-Za-z2-7]{32})", magnet, re.IGNORECASE)
-    if not m:
-        return None
-    h = m.group(1)
-    if len(h) == 32:
-        try:
-            return base64.b32decode(h.upper()).hex().upper()
-        except Exception:
-            return None
-    return h.upper()
-
-
-def inspect_torrent(magnet: str) -> list[str] | None:
-    """
-    Fetch .torrent metadata and return a list of suspicious filenames.
-    Returns None if the check could not be performed (all sources failed,
-    network error, parse failure). Callers must treat None as unverified,
-    not as clean.
-    """
-    hex_hash = _magnet_to_hex_hash(magnet)
-    if not hex_hash:
-        return None
-
-    sources = [
-        f"https://itorrents.org/torrent/{hex_hash}.torrent",
-        f"https://torcache.net/torrent/{hex_hash}.torrent",
-    ]
-    raw = None
-    for url in sources:
-        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        try:
-            with urlopen(req, timeout=10) as resp:
-                data = resp.read()
-            # Reject HTML responses (service redirected to a webpage instead of a .torrent)
-            if data[:1] in (b"d", b"l", b"i") or (len(data) > 1 and data[1:2] == b":"):
-                raw = data
-                break
-        except Exception:
-            continue
-
-    if raw is None:
-        return None
-
-    try:
-        torrent, _ = _bencode_decode(raw)
-        info = torrent.get(b"info", {})
-    except Exception:
-        return None
-
-    if not info:
-        return None
-
-    if b"files" in info:
-        files = [
-            "/".join(p.decode("utf-8", errors="replace") for p in f.get(b"path", []))
-            for f in info[b"files"]
-        ]
-    else:
-        files = [info.get(b"name", b"").decode("utf-8", errors="replace")]
-
-    return [f for f in files if Path(f).suffix.lower() in SUSPICIOUS_EXTS]
-
-
 # Strip [tracker.tag] annotations then check for spaces (scene/P2P releases
 # use dots throughout — spaces indicate a non-standard, potentially fake release).
 _TRACKER_TAG_RE = re.compile(r"\[.*?\]")
@@ -537,17 +436,8 @@ def _display_tv(
             if alt_score >= best_score * 0.85:
                 print(f"    Alt (score {alt_score}): {alt['name']}")
         print(f"    Magnet: {best['magnet'][:80]}…")
-        name_warning = _name_looks_suspicious(best["name"], uploader)
-        if name_warning:
-            print(f"  ⚠ Suspicious name: {name_warning}")
-        suspicious = inspect_torrent(best["magnet"])
-        if suspicious:
-            print(f"  ⚠ SKIPPED — torrent contains suspicious files: {', '.join(suspicious)}")
-            print()
-            continue
-        if suspicious is None:
-            print(f"  ⚠ Could not verify torrent file list (metadata unavailable)")
-        if name_warning or suspicious is None:
+        if _name_looks_suspicious(best["name"], uploader):
+            print(f"  ⚠ Suspicious name: spaces detected (scene/P2P releases use dots)")
             if not prompt_yes_no("Queue anyway?"):
                 print()
                 continue
@@ -569,17 +459,8 @@ def _display_movie(show: str, scored: list[tuple[int, dict]]) -> list[str]:
         print(f"    Name:  {t['name']}")
         print(f"    Added: {fmt_date(t['added'])}  Size: {fmt_size(t['size'])}")
         print(f"    Magnet: {t['magnet'][:80]}…")
-        name_warning = _name_looks_suspicious(t["name"], uploader)
-        if name_warning:
-            print(f"  ⚠ Suspicious name: {name_warning}")
-        suspicious = inspect_torrent(t["magnet"])
-        if suspicious:
-            print(f"  ⚠ SKIPPED — torrent contains suspicious files: {', '.join(suspicious)}")
-            print()
-            continue
-        if suspicious is None:
-            print(f"  ⚠ Could not verify torrent file list (metadata unavailable)")
-        if name_warning or suspicious is None:
+        if _name_looks_suspicious(t["name"], uploader):
+            print(f"  ⚠ Suspicious name: spaces detected (scene/P2P releases use dots)")
             if not prompt_yes_no("Queue anyway?"):
                 print()
                 continue
