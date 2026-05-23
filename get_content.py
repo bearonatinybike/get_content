@@ -243,6 +243,9 @@ def score_torrent(torrent: dict, cutoff_ts: int) -> int | None:
     if seeders > 0:
         score += min(50, int(math.log(seeders + 1) * 10))
 
+    if torrent.get("uploader") in TRUSTED_UPLOADERS:
+        score += 30
+
     return score
 
 
