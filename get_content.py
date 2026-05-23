@@ -158,7 +158,7 @@ def clean_query(query: str) -> str:
 
 def search_torrents(query: str, sort: int = 3) -> list[dict]:
     q = clean_query(query)
-    url = f"{SEARCH_BASE}/{quote_plus(q)}/1/{sort}/0"
+    url = f"{SEARCH_BASE}/{quote_plus(q)}/1/{sort}/200"
     html = fetch_html(url)
     if not html:
         return []
@@ -397,6 +397,11 @@ def _display_tv(
             print(f"  Skipping {skipped} episode(s) already downloaded (last: {last_ep})")
             print()
         episodes = filtered
+
+    # Without TVMaze, UNKNOWN-keyed results (no S##E## in name) are unidentifiable
+    # noise that can never be tracked — drop them in date-filter fallback mode.
+    if not expected:
+        episodes = {k: v for k, v in episodes.items() if k != "UNKNOWN"}
 
     # If TVMaze gave us a verified episode list, filter to just those keys;
     # also report any expected episodes that weren't found on TPB.
