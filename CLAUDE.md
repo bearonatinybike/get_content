@@ -6,7 +6,7 @@ Single-file Python script (`get_content.py`). No external dependencies — stdli
 
 ```
 main()
- ├── load_shows() / argparse
+ ├── load_content_list() / argparse  → shows + last_downloaded dict
  ├── per show: _search_and_display()
  │    ├── tvmaze_aired_this_week()   → verified episode list (or None)
  │    ├── search_torrents()          → piratebay.party HTML scrape
@@ -15,6 +15,7 @@ main()
  │    │    └── _drop_stale_episodes() → removes re-uploads of old eps
  │    └── _display_tv() / _display_movie()
  │         └── best_candidates()    → HD-first filter per episode
+ ├── save_content_list()             → writes updated last_downloaded after each show
  └── add_to_transmission()          → transmission-remote or open -g
 ```
 
@@ -79,3 +80,20 @@ Tries `transmission-remote {TRANSMISSION_HOST} --add {magnet}` first.
 Falls back to `open -g {magnet}` (macOS) on `FileNotFoundError` — the `-g` flag opens without activating the app, so focus stays in the terminal.
 
 All selected magnets are queued during the review pass and sent in a single batch at the end.
+
+## Content list (`~/.content_list.json`)
+
+JSON file with show names and per-show download history:
+
+```json
+{
+  "shows": ["Bob's Burgers", "Ghosts"],
+  "last_downloaded": {
+    "Ghosts": "S05E22"
+  }
+}
+```
+
+`load_content_list()` auto-migrates the old plain-text one-show-per-line format on first run. `save_content_list()` is called after each show in list mode so a Ctrl+C mid-run doesn't lose earlier updates.
+
+`_display_tv()` filters out any episode key `≤ last_downloaded[show]` before prompting. The comparison is lexicographic on zero-padded `S##E##` strings, which correctly orders across season boundaries (e.g. `S03E01 > S02E15`). When the user queues an episode, `last_downloaded` is updated to the highest-keyed episode queued that session.

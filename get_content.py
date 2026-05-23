@@ -21,7 +21,7 @@ from urllib.request import urlopen, Request
 from urllib.error import URLError
 
 # --- Configuration ---
-CONTENT_LIST = Path("~/.content_list").expanduser()
+CONTENT_LIST = Path("~/.content_list.json").expanduser()
 SEARCH_BASE = "https://piratebay.party/search"
 DAYS_BACK = 6
 TRANSMISSION_HOST = "localhost"
@@ -319,14 +319,27 @@ def fmt_date(ts: int) -> str:
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else "unknown"
 
 
-def load_shows() -> list[str]:
+def load_content_list() -> tuple[list[str], dict]:
+    """Load show list and download history. Auto-migrates plain-text format to JSON."""
     if not CONTENT_LIST.exists():
         sys.exit(
             f"Content list not found: {CONTENT_LIST}\n"
-            "Create it with one show name per line (# lines are comments)."
+            'Create it as JSON: {"shows": ["Show Name", ...]}'
         )
-    return [l.strip() for l in CONTENT_LIST.read_text().splitlines()
-            if l.strip() and not l.startswith("#")]
+    raw = CONTENT_LIST.read_text().strip()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        shows = [l.strip() for l in raw.splitlines() if l.strip() and not l.startswith("#")]
+        data = {"shows": shows, "last_downloaded": {}}
+        CONTENT_LIST.write_text(json.dumps(data, indent=2) + "\n")
+        print(f"Migrated {CONTENT_LIST} to JSON format.\n")
+    data.setdefault("last_downloaded", {})
+    return data.get("shows", []), data
+
+
+def save_content_list(data: dict) -> None:
+    CONTENT_LIST.write_text(json.dumps(data, indent=2) + "\n")
 
 
 def prompt_yes_no(question: str) -> bool:
@@ -345,8 +358,19 @@ def _display_tv(
     show: str,
     scored: list[tuple[int, dict]],
     expected: dict[str, str] | None,
+    *,
+    last_downloaded: dict | None = None,
 ) -> list[str]:
     episodes = group_by_episode(scored)
+
+    last_ep = (last_downloaded or {}).get(show)
+    if last_ep:
+        filtered = {k: v for k, v in episodes.items() if k > last_ep}
+        skipped = len(episodes) - len(filtered)
+        if skipped:
+            print(f"  Skipping {skipped} episode(s) already downloaded (last: {last_ep})")
+            print()
+        episodes = filtered
 
     # If TVMaze gave us a verified episode list, filter to just those keys;
     # also report any expected episodes that weren't found on TPB.
@@ -386,6 +410,9 @@ def _display_tv(
         print(f"    Magnet: {best['magnet'][:80]}…")
         if prompt_yes_no(f"Queue {tag}?"):
             selected.append(best["magnet"])
+            if last_downloaded is not None:
+                if show not in last_downloaded or ep_key > last_downloaded[show]:
+                    last_downloaded[show] = ep_key
         print()
     return selected
 
@@ -408,7 +435,9 @@ def _display_movie(show: str, scored: list[tuple[int, dict]]) -> list[str]:
 # Main
 # ---------------------------------------------------------------------------
 
-def _search_and_display(show: str, is_movie: bool, cutoff: int) -> list[str]:
+def _search_and_display(
+    show: str, is_movie: bool, cutoff: int, *, last_downloaded: dict | None = None
+) -> list[str]:
     print(f"{'='*60}")
     print(f"  {show}")
     print(f"{'='*60}")
@@ -438,7 +467,7 @@ def _search_and_display(show: str, is_movie: bool, cutoff: int) -> list[str]:
     if is_movie:
         return _display_movie(show, scored)
     else:
-        return _display_tv(show, scored, expected)
+        return _display_tv(show, scored, expected, last_downloaded=last_downloaded)
 
 
 def main() -> None:
@@ -468,12 +497,14 @@ def main() -> None:
     else:
         if args.tv or args.movie:
             ap.error("--tv / --movie only apply when a query argument is given")
-        shows = load_shows()
+        shows, data = load_content_list()
         if not shows:
             sys.exit("No shows found in content list.")
+        ld = data["last_downloaded"]
         print(f"Searching piratebay.party — {len(shows)} show(s), last {DAYS_BACK} days\n")
         for show in shows:
-            queue.extend(_search_and_display(show, is_movie=False, cutoff=tv_cutoff))
+            queue.extend(_search_and_display(show, is_movie=False, cutoff=tv_cutoff, last_downloaded=ld))
+            save_content_list(data)
 
     if queue:
         print(f"\nSending {len(queue)} torrent(s) to Transmission…")
