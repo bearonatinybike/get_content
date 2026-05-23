@@ -41,6 +41,12 @@ SUSPICIOUS_EXTS = frozenset({
     ".exe", ".dll", ".bat", ".cmd", ".com", ".scr",
     ".vbs", ".js", ".ps1", ".msi", ".jar", ".pif", ".lnk",
 })
+# Uploaders with an established track record on piratebay.party; suppress
+# the spaces-in-name heuristic for these since they legitimately use spaces.
+TRUSTED_UPLOADERS = frozenset({
+    "TvTeam", "EZTV", "YTS", "YTS.MX", "YTS.LT", "YTS.AG",
+    "mkvCinemas", "Pahe.in", "FitGirl",
+})
 
 # ---------------------------------------------------------------------------
 # HTML scraping
@@ -105,6 +111,8 @@ def _parse_rows(html: str) -> list[dict]:
         m_date = re.search(r"<td>((?:Today|Y-day|\d{1,2}-\d{1,2})[^<]{3,15})</td>", chunk)
         # align=right tds: size, seeders, leechers
         right_tds = re.findall(r'<td align="right">([^<]+)</td>', chunk)
+        # Uploader: last <td> containing a /user/ link
+        m_user = re.search(r'<td><a href="/user/[^"]+/"[^>]*>([^<]+)</a></td>', chunk)
 
         results.append({
             "name":     m_name.group(1),
@@ -113,6 +121,7 @@ def _parse_rows(html: str) -> list[dict]:
             "size":     _parse_size(right_tds[0]) if len(right_tds) > 0 else 0,
             "seeders":  int(right_tds[1]) if len(right_tds) > 1 and right_tds[1].isdigit() else 0,
             "leechers": int(right_tds[2]) if len(right_tds) > 2 and right_tds[2].isdigit() else 0,
+            "uploader": m_user.group(1) if m_user else "",
         })
     return results
 
@@ -388,11 +397,13 @@ def inspect_torrent(magnet: str) -> list[str] | None:
 # use dots throughout — spaces indicate a non-standard, potentially fake release).
 _TRACKER_TAG_RE = re.compile(r"\[.*?\]")
 
-def _name_looks_suspicious(name: str) -> str | None:
+def _name_looks_suspicious(name: str, uploader: str = "") -> str | None:
     """Return a warning string if the torrent name has suspicious formatting, else None."""
+    if uploader in TRUSTED_UPLOADERS:
+        return None
     clean = _TRACKER_TAG_RE.sub("", name).strip()
     if " " in clean:
-        return "name contains spaces (legitimate scene/P2P releases use dots, not spaces)"
+        return "name contains spaces (scene/P2P releases use dots, not spaces)"
     return None
 
 
@@ -512,16 +523,18 @@ def _display_tv(
         tag = f"[{ep_key}]"
         hd_note = "" if is_hd else "  ⚠ no HD found"
         print(f"  {tag} {ep_label.split('·')[-1].strip() if '·' in ep_label else ''}  score {best_score}{hd_note}")
+        uploader = best.get("uploader", "")
         print(f"    Name:  {best['name']}")
         print(f"    Added: {fmt_date(best['added'])}  "
               f"Size: {fmt_size(best['size'])}  "
-              f"Seeds: {best.get('seeders', '?')}")
+              f"Seeds: {best.get('seeders', '?')}  "
+              f"By: {uploader or 'unknown'}")
         if len(candidates) > 1:
             alt_score, alt = candidates[1]
             if alt_score >= best_score * 0.85:
                 print(f"    Alt (score {alt_score}): {alt['name']}")
         print(f"    Magnet: {best['magnet'][:80]}…")
-        name_warning = _name_looks_suspicious(best["name"])
+        name_warning = _name_looks_suspicious(best["name"], uploader)
         if name_warning:
             print(f"  ⚠ Suspicious name: {name_warning}")
         suspicious = inspect_torrent(best["magnet"])
@@ -548,11 +561,12 @@ def _display_movie(show: str, scored: list[tuple[int, dict]]) -> list[str]:
     print(f"  Found {len(scored)} result(s). Top matches:\n")
     selected = []
     for rank, (sc, t) in enumerate(scored[:5], 1):
-        print(f"  [{rank}] score {sc}  Seeds: {t.get('seeders', '?')}")
+        uploader = t.get("uploader", "")
+        print(f"  [{rank}] score {sc}  Seeds: {t.get('seeders', '?')}  By: {uploader or 'unknown'}")
         print(f"    Name:  {t['name']}")
         print(f"    Added: {fmt_date(t['added'])}  Size: {fmt_size(t['size'])}")
         print(f"    Magnet: {t['magnet'][:80]}…")
-        name_warning = _name_looks_suspicious(t["name"])
+        name_warning = _name_looks_suspicious(t["name"], uploader)
         if name_warning:
             print(f"  ⚠ Suspicious name: {name_warning}")
         suspicious = inspect_torrent(t["magnet"])
