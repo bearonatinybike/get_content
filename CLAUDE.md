@@ -29,7 +29,7 @@ https://piratebay.party/search/{query}/{page}/{sort}/{category}
 
 - `sort=3` → newest first (used for TV, so recent low-seeder episodes aren't buried)
 - `sort=8` → most seeded (used for movies)
-- `category=0` → all
+- `category=200` → Video (all subcategories); excludes Porn (500-series) and non-video
 
 Parsing is regex-on-`<tr>`-chunks (not HTMLParser). The confirmed column order:
 
@@ -42,6 +42,7 @@ Parsing is regex-on-`<tr>`-chunks (not HTMLParser). The confirmed column order:
 | 4 | size — `align=right`, text like `582.97&nbsp;MiB` |
 | 5 | seeders — `align=right`, integer |
 | 6 | leechers — `align=right`, integer |
+| 7 | uploader — `<a href="/user/USERNAME/" title="Browse USERNAME">USERNAME</a>` |
 
 Key gotchas:
 - Dates use `&nbsp;` as the literal entity string (not decoded to `\xa0`) between date and time parts — both must be replaced before parsing.
@@ -54,25 +55,34 @@ Key gotchas:
 Free API, no key required. Two calls per show:
 
 1. `GET https://api.tvmaze.com/search/shows?q={name}` → take `results[0]["show"]["id"]`
-2. `GET https://api.tvmaze.com/shows/{id}/episodes` → filter by `airdate >= today - DAYS_BACK`
+2. `GET https://api.tvmaze.com/shows/{id}/episodes` → filter by `today - DAYS_BACK <= airdate <= today`
 
 Returns `{episode_key: "S01E03 · Title (YYYY-MM-DD)"}` or `None` if the show isn't found.
 
-When TVMaze data is available it replaces both the date-window filter and the stale-episode heuristic — only TVMaze-confirmed episodes are shown. If TVMaze fails, falls back to date filtering + `_drop_stale_episodes()`.
+The upper bound (`airdate <= today`) is essential — without it, future episodes appear as "Not on TPB yet" when they simply haven't aired. When TVMaze data is available it replaces both the date-window filter and the stale-episode heuristic — only TVMaze-confirmed episodes are shown. If TVMaze fails, falls back to date filtering + `_drop_stale_episodes()`.
 
 ## Stale episode filter (`_drop_stale_episodes`)
 
 Fallback for when TVMaze doesn't know the show. Groups found episodes by season, finds the max episode number per season, and discards any episode more than `DAYS_BACK` numbers behind the max. Prevents re-uploads of e.g. S16E01 from appearing when S16E14/E15 are the current episodes.
 
+`UNKNOWN`-keyed results (no S##E## pattern in the name) are dropped entirely in date-filter fallback mode — they can't be tracked in `last_downloaded` and `"UNKNOWN" > "S##E##"` lexicographically, so they would bypass the already-downloaded filter.
+
 ## Scoring
 
 ```python
-CODEC_SCORES   = {hevc/h265/x265: 120,  h264/x264: 40-60, avc: 40}
+CODEC_SCORES      = {hevc/h265/x265: 120,  h264/x264: 40-60, avc: 40}
 RESOLUTION_SCORES = {2160p/4k/uhd: 75-80, 1080p: 60, 720p: 20}
-seeder_bonus   = min(50, log(seeders+1) * 10)
+seeder_bonus      = min(50, log(seeders+1) * 10)
+trusted_uploader  = +30 if uploader in TRUSTED_UPLOADERS else 0
 ```
 
-HD filter (`best_candidates`) runs *after* scoring — it filters the per-episode candidate list to 1080p+ before picking the winner, so a high-seeder 720p can never beat a low-seeder 1080p.
+`TRUSTED_UPLOADERS` is a frozenset at the top of the config section (TvTeam, EZTV, YTS variants, etc.). HD filter (`best_candidates`) runs *after* scoring — it filters the per-episode candidate list to 1080p+ before picking the winner, so a high-seeder 720p can never beat a low-seeder 1080p.
+
+## Safety checks
+
+`_name_looks_suspicious(name, uploader)` warns when a torrent name contains spaces after stripping `[tracker]` annotations — legitimate scene/P2P releases use dots throughout. The warning is suppressed for uploaders in `TRUSTED_UPLOADERS` (they legitimately use spaces). When triggered, a "Queue anyway?" prompt gates the main queue prompt so the user is never silently bypassed.
+
+The uploader is displayed on every result line (`By: USERNAME`) so it's always visible when making a decision.
 
 ## Transmission
 
