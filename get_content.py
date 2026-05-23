@@ -197,7 +197,8 @@ def tvmaze_aired_this_week(show_name: str, days_back: int) -> dict[str, str] | N
     if not episodes:
         return None
 
-    cutoff = (datetime.now() - timedelta(days=days_back)).date()
+    today = datetime.now().date()
+    cutoff = today - timedelta(days=days_back)
     aired = {}
     for ep in episodes:
         airdate_str = ep.get("airdate") or ""
@@ -207,7 +208,7 @@ def tvmaze_aired_this_week(show_name: str, days_back: int) -> dict[str, str] | N
             airdate = datetime.strptime(airdate_str, "%Y-%m-%d").date()
         except ValueError:
             continue
-        if airdate >= cutoff:
+        if cutoff <= airdate <= today:
             key = f"S{ep['season']:02d}E{ep['number']:02d}"
             aired[key] = f"{key} · {ep.get('name', '?')} ({airdate_str})"
     return aired or None
