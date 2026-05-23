@@ -1,0 +1,81 @@
+# get_content — dev notes
+
+Single-file Python script (`get_content.py`). No external dependencies — stdlib only.
+
+## Architecture
+
+```
+main()
+ ├── load_shows() / argparse
+ ├── per show: _search_and_display()
+ │    ├── tvmaze_aired_this_week()   → verified episode list (or None)
+ │    ├── search_torrents()          → piratebay.party HTML scrape
+ │    ├── score_torrent()            → codec + resolution + seeders
+ │    ├── group_by_episode()         → keyed by S##E##
+ │    │    └── _drop_stale_episodes() → removes re-uploads of old eps
+ │    └── _display_tv() / _display_movie()
+ │         └── best_candidates()    → HD-first filter per episode
+ └── add_to_transmission()          → transmission-remote or open -g
+```
+
+## HTML scraping (piratebay.party)
+
+The site does **not** expose a JSON API. It uses standard TPB-proxy HTML. The search URL is:
+
+```
+https://piratebay.party/search/{query}/{page}/{sort}/{category}
+```
+
+- `sort=3` → newest first (used for TV, so recent low-seeder episodes aren't buried)
+- `sort=8` → most seeded (used for movies)
+- `category=0` → all
+
+Parsing is regex-on-`<tr>`-chunks (not HTMLParser). The confirmed column order:
+
+| col | content |
+|-----|---------|
+| 0 | category (`class="vertTh"`) |
+| 1 | name — `<a title="Details for NAME">` |
+| 2 | date — `Today HH:MM`, `Y-day HH:MM`, or `MM-DD HH:MM` (no year!) |
+| 3 | magnet — `<nobr><a href="magnet:...">` |
+| 4 | size — `align=right`, text like `582.97&nbsp;MiB` |
+| 5 | seeders — `align=right`, integer |
+| 6 | leechers — `align=right`, integer |
+
+Key gotchas:
+- Dates use `&nbsp;` as the literal entity string (not decoded to `\xa0`) between date and time parts — both must be replaced before parsing.
+- Date has no year. Assume current year; if the resulting datetime would be in the future, use last year.
+- `Today` / `Y-day` prefixes are used for very recent uploads.
+- The `class="odd"` / `class="even"` row classes from classic TPB **do not exist** on this mirror.
+
+## TVMaze integration
+
+Free API, no key required. Two calls per show:
+
+1. `GET https://api.tvmaze.com/search/shows?q={name}` → take `results[0]["show"]["id"]`
+2. `GET https://api.tvmaze.com/shows/{id}/episodes` → filter by `airdate >= today - DAYS_BACK`
+
+Returns `{episode_key: "S01E03 · Title (YYYY-MM-DD)"}` or `None` if the show isn't found.
+
+When TVMaze data is available it replaces both the date-window filter and the stale-episode heuristic — only TVMaze-confirmed episodes are shown. If TVMaze fails, falls back to date filtering + `_drop_stale_episodes()`.
+
+## Stale episode filter (`_drop_stale_episodes`)
+
+Fallback for when TVMaze doesn't know the show. Groups found episodes by season, finds the max episode number per season, and discards any episode more than `DAYS_BACK` numbers behind the max. Prevents re-uploads of e.g. S16E01 from appearing when S16E14/E15 are the current episodes.
+
+## Scoring
+
+```python
+CODEC_SCORES   = {hevc/h265/x265: 120,  h264/x264: 40-60, avc: 40}
+RESOLUTION_SCORES = {2160p/4k/uhd: 75-80, 1080p: 60, 720p: 20}
+seeder_bonus   = min(50, log(seeders+1) * 10)
+```
+
+HD filter (`best_candidates`) runs *after* scoring — it filters the per-episode candidate list to 1080p+ before picking the winner, so a high-seeder 720p can never beat a low-seeder 1080p.
+
+## Transmission
+
+Tries `transmission-remote {TRANSMISSION_HOST} --add {magnet}` first.  
+Falls back to `open -g {magnet}` (macOS) on `FileNotFoundError` — the `-g` flag opens without activating the app, so focus stays in the terminal.
+
+All selected magnets are queued during the review pass and sent in a single batch at the end.
