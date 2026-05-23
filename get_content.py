@@ -335,20 +335,33 @@ def _magnet_to_hex_hash(magnet: str) -> str | None:
 
 def inspect_torrent(magnet: str) -> list[str] | None:
     """
-    Fetch .torrent metadata from itorrents.org and return a list of suspicious
-    filenames. Returns None if the check could not be performed (network error,
-    parse failure, etc.) — callers should proceed without blocking in that case.
+    Fetch .torrent metadata and return a list of suspicious filenames.
+    Returns None if the check could not be performed (all sources failed,
+    network error, parse failure). Callers must treat None as unverified,
+    not as clean.
     """
     hex_hash = _magnet_to_hex_hash(magnet)
     if not hex_hash:
         return None
 
-    url = f"https://itorrents.org/torrent/{hex_hash}.torrent"
-    req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        with urlopen(req, timeout=10) as resp:
-            raw = resp.read()
-    except Exception:
+    sources = [
+        f"https://itorrents.org/torrent/{hex_hash}.torrent",
+        f"https://torcache.net/torrent/{hex_hash}.torrent",
+    ]
+    raw = None
+    for url in sources:
+        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            with urlopen(req, timeout=10) as resp:
+                data = resp.read()
+            # Reject HTML responses (service redirected to a webpage instead of a .torrent)
+            if data[:1] in (b"d", b"l", b"i") or (len(data) > 1 and data[1:2] == b":"):
+                raw = data
+                break
+        except Exception:
+            continue
+
+    if raw is None:
         return None
 
     try:
@@ -369,6 +382,18 @@ def inspect_torrent(magnet: str) -> list[str] | None:
         files = [info.get(b"name", b"").decode("utf-8", errors="replace")]
 
     return [f for f in files if Path(f).suffix.lower() in SUSPICIOUS_EXTS]
+
+
+# Strip [tracker.tag] annotations then check for spaces (scene/P2P releases
+# use dots throughout — spaces indicate a non-standard, potentially fake release).
+_TRACKER_TAG_RE = re.compile(r"\[.*?\]")
+
+def _name_looks_suspicious(name: str) -> str | None:
+    """Return a warning string if the torrent name has suspicious formatting, else None."""
+    clean = _TRACKER_TAG_RE.sub("", name).strip()
+    if " " in clean:
+        return "name contains spaces (legitimate scene/P2P releases use dots, not spaces)"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -496,11 +521,20 @@ def _display_tv(
             if alt_score >= best_score * 0.85:
                 print(f"    Alt (score {alt_score}): {alt['name']}")
         print(f"    Magnet: {best['magnet'][:80]}…")
+        name_warning = _name_looks_suspicious(best["name"])
+        if name_warning:
+            print(f"  ⚠ Suspicious name: {name_warning}")
         suspicious = inspect_torrent(best["magnet"])
         if suspicious:
             print(f"  ⚠ SKIPPED — torrent contains suspicious files: {', '.join(suspicious)}")
             print()
             continue
+        if suspicious is None:
+            print(f"  ⚠ Could not verify torrent file list (metadata unavailable)")
+        if name_warning or suspicious is None:
+            if not prompt_yes_no("Queue anyway?"):
+                print()
+                continue
         if prompt_yes_no(f"Queue {tag}?"):
             selected.append(best["magnet"])
             if last_downloaded is not None:
@@ -518,11 +552,20 @@ def _display_movie(show: str, scored: list[tuple[int, dict]]) -> list[str]:
         print(f"    Name:  {t['name']}")
         print(f"    Added: {fmt_date(t['added'])}  Size: {fmt_size(t['size'])}")
         print(f"    Magnet: {t['magnet'][:80]}…")
+        name_warning = _name_looks_suspicious(t["name"])
+        if name_warning:
+            print(f"  ⚠ Suspicious name: {name_warning}")
         suspicious = inspect_torrent(t["magnet"])
         if suspicious:
             print(f"  ⚠ SKIPPED — torrent contains suspicious files: {', '.join(suspicious)}")
             print()
             continue
+        if suspicious is None:
+            print(f"  ⚠ Could not verify torrent file list (metadata unavailable)")
+        if name_warning or suspicious is None:
+            if not prompt_yes_no("Queue anyway?"):
+                print()
+                continue
         if prompt_yes_no(f"Queue [{rank}]?"):
             selected.append(t["magnet"])
         print()
