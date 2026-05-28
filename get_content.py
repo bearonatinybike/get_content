@@ -492,6 +492,8 @@ def _display_movie(show: str, scored: list[tuple[int, dict]]) -> list[str]:
         print(f"    Magnet: {t['magnet'][:80]}…")
         if prompt_yes_no(f"Queue [{rank}]?"):
             selected.append(t["magnet"])
+            print()
+            break
         print()
     return selected
 
