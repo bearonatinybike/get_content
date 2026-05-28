@@ -10,7 +10,8 @@ main()
  ├── per show: _search_and_display()
  │    ├── tvmaze_aired_this_week()   → verified episode list (or None)
  │    ├── search_torrents()          → piratebay.party HTML scrape
- │    ├── score_torrent()            → codec + resolution + seeders
+ │    ├── title filter               → drops results missing any query word
+ │    ├── score_torrent()            → codec + resolution + audio + seeders + size
  │    ├── group_by_episode()         → keyed by S##E##
  │    │    └── _drop_stale_episodes() → removes re-uploads of old eps
  │    └── _display_tv() / _display_movie()
@@ -28,7 +29,7 @@ https://piratebay.party/search/{query}/{page}/{sort}/{category}
 ```
 
 - `sort=3` → newest first (used for TV, so recent low-seeder episodes aren't buried)
-- `sort=8` → most seeded (used for movies)
+- `sort=7` → most seeded (used for movies; sort=8 is leechers or broken — do not use)
 - `category=200` → Video (all subcategories); excludes Porn (500-series) and non-video
 
 Parsing is regex-on-`<tr>`-chunks (not HTMLParser). The confirmed column order:
@@ -70,17 +71,34 @@ Fallback for when TVMaze doesn't know the show. Groups found episodes by season,
 ## Scoring
 
 ```python
-CODEC_SCORES      = {hevc/h265/x265: 120,  h264/x264: 40-60, avc: 40}
+CODEC_SCORES      = {hevc/h265/x265: 120, h264/x264/h 264: 40-60, avc: 40}
 RESOLUTION_SCORES = {2160p/4k/uhd: 75-80, 1080p: 60, 720p: 20}
-seeder_bonus      = min(50, log(seeders+1) * 10)
-trusted_uploader  = +30 if uploader in TRUSTED_UPLOADERS else 0
+AUDIO_SCORES      = {atmos/truehd: 30, dts-hd ma/dts:x: 25, dts-hd: 20,
+                     eac3/ddp/dd+: 15, dts: 10, aac/ac3: 5}
+seeder_bonus      = min(20, log(seeders+1) * 10)   # tiebreaker only
+trusted_uploader  = +30 (TV: TvTeam/EZTV; movies: YTS variants/mkvCinemas/Pahe.in/FitGirl)
+movie_size_bonus  = linear 0→+40 for files in the 2–6 GB sweet spot
+movie_size_cap    = files > 10 GB excluded (remuxes)
 ```
 
-`TRUSTED_UPLOADERS` is a frozenset at the top of the config section (TvTeam, EZTV, YTS variants, etc.). HD filter (`best_candidates`) runs *after* scoring — it filters the per-episode candidate list to 1080p+ before picking the winner, so a high-seeder 720p can never beat a low-seeder 1080p.
+Key design decisions:
+- Seeder bonus is capped at 20 so quality signals (codec/resolution/audio) dominate. Seeds are a tiebreaker, not a quality indicator.
+- Audio tokens are matched most-specific-first (dict insertion order) so "dts-hd ma" matches before "dts-hd" before "dts", and "eac3" before "ac3".
+- Codec tokens include space-separated variants ("h 265", "h 264") because some uploaders write them that way.
+- Trusted uploaders are split by context: TV uploaders (TvTeam, EZTV) don't get the bonus in movie searches and vice versa.
+- HD filter (`best_candidates`) runs *after* scoring for TV — it filters the per-episode candidate list to 1080p+ before picking the winner, so a high-seeder 720p can never beat a low-seeder 1080p.
+
+## Title relevance filter
+
+Before scoring, results are hard-filtered to only those whose names contain every word of the search query as a substring (case-insensitive). This prevents e.g. "The Project 2018" appearing in a "Project Hail Mary" search. The check uses plain `tok in name.lower()` — no word splitting — which is more robust than set-membership against unexpected name formats.
+
+Applied in `_search_and_display` before `score_torrent` is called.
 
 ## Safety checks
 
 `_name_looks_suspicious(name, uploader)` warns when a torrent name contains spaces after stripping `[tracker]` annotations — legitimate scene/P2P releases use dots throughout. The warning is suppressed for uploaders in `TRUSTED_UPLOADERS` (they legitimately use spaces). When triggered, a "Queue anyway?" prompt gates the main queue prompt so the user is never silently bypassed.
+
+**TV only** — the spaces heuristic is not applied in movie mode. Movie uploaders commonly use spaces in names legitimately.
 
 The uploader is displayed on every result line (`By: USERNAME`) so it's always visible when making a decision.
 

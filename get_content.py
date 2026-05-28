@@ -28,20 +28,31 @@ TRANSMISSION_HOST = "localhost"
 
 # Score weights
 CODEC_SCORES = {
-    "hevc": 120, "h265": 120, "h.265": 120, "x265": 120,
-    "h264": 60,  "h.264": 60,  "x264": 60,  "avc": 40,
+    "hevc": 120, "h265": 120, "h.265": 120, "h 265": 120, "x265": 120,
+    "h264": 60,  "h.264": 60,  "h 264": 60,  "x264": 60,  "avc": 40,
 }
 RESOLUTION_SCORES = {
     "2160p": 80, "4k": 75, "uhd": 70,
     "1080p": 60,
     "720p": 20,
 }
-# Uploaders with an established track record on piratebay.party; suppress
-# the spaces-in-name heuristic for these since they legitimately use spaces.
-TRUSTED_UPLOADERS = frozenset({
-    "TvTeam", "EZTV", "YTS", "YTS.MX", "YTS.LT", "YTS.AG",
-    "mkvCinemas", "Pahe.in", "FitGirl",
-})
+# Most-specific tokens first so "dts-hd ma" matches before "dts-hd" before "dts",
+# and "eac3" before "ac3".
+AUDIO_SCORES = {
+    "atmos":     30, "truehd":   30,
+    "dts-hd ma": 25, "dts:x":    25,
+    "dts-hd":    20,
+    "eac3":      15, "ddp":      15, "dd+": 15,
+    "dts":       10,
+    "aac":        5, "ac3":       5,
+}
+# Uploaders with an established track record on piratebay.party.
+# Split by content type so the +30 bonus only fires in the right context
+# (e.g. TvTeam/EZTV should not boost results in a movie search).
+TRUSTED_TV_UPLOADERS    = frozenset({"TvTeam", "EZTV"})
+TRUSTED_MOVIE_UPLOADERS = frozenset({"YTS", "YTS.MX", "YTS.LT", "YTS.AG", "mkvCinemas", "Pahe.in", "FitGirl"})
+# Combined set — used only for the spaces-in-name suppression heuristic.
+TRUSTED_UPLOADERS = TRUSTED_TV_UPLOADERS | TRUSTED_MOVIE_UPLOADERS
 
 # ---------------------------------------------------------------------------
 # HTML scraping
@@ -218,7 +229,7 @@ def tvmaze_aired_this_week(show_name: str, days_back: int) -> dict[str, str] | N
 # Scoring and episode grouping
 # ---------------------------------------------------------------------------
 
-def score_torrent(torrent: dict, cutoff_ts: int) -> int | None:
+def score_torrent(torrent: dict, cutoff_ts: int, *, is_tv: bool = True) -> int | None:
     if torrent["added"] < cutoff_ts:
         return None
 
@@ -236,11 +247,25 @@ def score_torrent(torrent: dict, cutoff_ts: int) -> int | None:
             score += pts
             break
 
-    if seeders > 0:
-        score += min(50, int(math.log(seeders + 1) * 10))
+    for token, pts in AUDIO_SCORES.items():
+        if token in name:
+            score += pts
+            break
 
-    if torrent.get("uploader") in TRUSTED_UPLOADERS:
+    if seeders > 0:
+        score += min(20, int(math.log(seeders + 1) * 10))
+
+    trusted = TRUSTED_TV_UPLOADERS if is_tv else TRUSTED_MOVIE_UPLOADERS
+    if torrent.get("uploader") in trusted:
         score += 30
+
+    if not is_tv:
+        _GB = 1024 ** 3
+        size = torrent.get("size", 0)
+        if size > 10 * _GB:
+            return None
+        if 2 * _GB <= size <= 6 * _GB:
+            score += int((size - 2 * _GB) / (4 * _GB) * 40)
 
     return score
 
@@ -465,11 +490,6 @@ def _display_movie(show: str, scored: list[tuple[int, dict]]) -> list[str]:
         print(f"    Name:  {t['name']}")
         print(f"    Added: {fmt_date(t['added'])}  Size: {fmt_size(t['size'])}")
         print(f"    Magnet: {t['magnet'][:80]}…")
-        if _name_looks_suspicious(t["name"], uploader):
-            print(f"  ⚠ Suspicious name: spaces detected (scene/P2P releases use dots)")
-            if not prompt_yes_no("Queue anyway?"):
-                print()
-                continue
         if prompt_yes_no(f"Queue [{rank}]?"):
             selected.append(t["magnet"])
         print()
@@ -496,12 +516,18 @@ def _search_and_display(
             print("  TVMaze: show not found — using date filter only")
         print()
 
-    raw = search_torrents(show, sort=8 if is_movie else 3)
+    raw = search_torrents(show, sort=7 if is_movie else 3)
     if not raw:
         print("  No results found.\n")
         return []
 
-    scored = [(s, t) for t in raw if (s := score_torrent(t, cutoff)) is not None]
+    tokens = clean_query(show).lower().split()
+    raw = [t for t in raw if all(tok in t["name"].lower() for tok in tokens)]
+    if not raw:
+        print("  No results matched the query title.\n")
+        return []
+
+    scored = [(s, t) for t in raw if (s := score_torrent(t, cutoff, is_tv=not is_movie)) is not None]
     if not scored:
         window = "all time" if cutoff == 0 else f"the last {DAYS_BACK} days"
         print(f"  No results in {window}.\n")

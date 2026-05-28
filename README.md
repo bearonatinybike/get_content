@@ -56,9 +56,19 @@ Each torrent gets a score before being offered:
 | 2160p / 4K / UHD | +75–80 |
 | 1080p | +60 |
 | 720p | +20 |
-| Seeders (log scale) | up to +50 |
+| Atmos / TrueHD | +30 |
+| DTS-HD MA / DTS:X | +25 |
+| DTS-HD | +20 |
+| EAC3 / DDP / DD+ | +15 |
+| DTS | +10 |
+| AAC / AC3 | +5 |
+| Seeders (log scale, tiebreaker) | up to +20 |
+| Trusted uploader (context-aware) | +30 |
+| Movie size 2–6 GB (quality sweet spot) | up to +40 |
 
-Within each episode, only HD results (1080p+) are considered. 720p is shown only if no HD version exists, with a warning.
+Results are filtered to only those whose names contain every word of the search query, so searching "Project Hail Mary" won't surface "The Project" or "Hail Caesar".
+
+For TV, only HD results (1080p+) are shown per episode. 720p is a fallback with a warning. For movies, results over 10 GB (remuxes) are excluded, and names with spaces trigger a warning since scene/P2P releases use dots.
 
 ## Transmission
 
@@ -68,12 +78,15 @@ To use `transmission-remote` directly: `brew install transmission-cli`.
 
 ## Content list format
 
-```
-# This is a comment
-Bob's Burgers
-Ghosts
-Hacks
-# Severance  ← disabled
+The list is stored as JSON at `~/.content_list.json`. The old plain-text format is auto-migrated on first run.
+
+```json
+{
+  "shows": ["Bob's Burgers", "Ghosts", "Hacks"],
+  "last_downloaded": {
+    "Ghosts": "S05E22"
+  }
+}
 ```
 
-Special characters like apostrophes are stripped automatically before searching.
+`last_downloaded` is updated automatically as you queue episodes, so re-running won't re-offer episodes you've already grabbed. Special characters like apostrophes are stripped before searching.
