@@ -16,7 +16,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
@@ -28,8 +28,8 @@ TRANSMISSION_HOST = "localhost"
 
 # Score weights
 CODEC_SCORES = {
-    "hevc": 120, "h265": 120, "h.265": 120, "h 265": 120, "x265": 120,
-    "h264": 60,  "h.264": 60,  "h 264": 60,  "x264": 60,  "avc": 40,
+    "hevc": 80, "h265": 80, "h.265": 80, "h 265": 80, "x265": 80,
+    "h264": 60, "h.264": 60, "h 264": 60, "x264": 60, "avc": 40,
 }
 RESOLUTION_SCORES = {
     "2160p": 80, "4k": 75, "uhd": 70,
@@ -167,9 +167,9 @@ def clean_query(query: str) -> str:
     return re.sub(r"\s+", " ", query).strip()
 
 
-def search_torrents(query: str, sort: int = 3) -> list[dict]:
+def search_torrents(query: str, sort: int = 3, category: int = 200) -> list[dict]:
     q = clean_query(query)
-    url = f"{SEARCH_BASE}/{quote_plus(q)}/1/{sort}/200"
+    url = f"{SEARCH_BASE}/{quote(q, safe='')}/1/{sort}/{category}"
     html = fetch_html(url)
     if not html:
         return []
@@ -234,6 +234,8 @@ def score_torrent(torrent: dict, cutoff_ts: int, *, is_tv: bool = True) -> int |
         return None
 
     name = torrent["name"].lower()
+    if not is_tv and EPISODE_RE.search(name):
+        return None
     seeders = torrent.get("seeders", 0)
     score = 0
 
@@ -518,7 +520,7 @@ def _search_and_display(
             print("  TVMaze: show not found — using date filter only")
         print()
 
-    raw = search_torrents(show, sort=7 if is_movie else 3)
+    raw = search_torrents(show, sort=99 if is_movie else 3)
     if not raw:
         print("  No results found.\n")
         return []

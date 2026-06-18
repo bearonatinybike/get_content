@@ -29,8 +29,8 @@ https://piratebay.party/search/{query}/{page}/{sort}/{category}
 ```
 
 - `sort=3` → newest first (used for TV, so recent low-seeder episodes aren't buried)
-- `sort=7` → most seeded (used for movies; sort=8 is leechers or broken — do not use)
-- `category=200` → Video (all subcategories); excludes Porn (500-series) and non-video
+- `sort=99` → relevance (used for movies; sort=7 "most seeded" is broken on this mirror — ignores the query and returns global popular content)
+- `category=200` → Video (all subcategories); used for both TV and movies
 
 Parsing is regex-on-`<tr>`-chunks (not HTMLParser). The confirmed column order:
 
