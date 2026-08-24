@@ -194,15 +194,21 @@ def _tvmaze_get(url: str):
         return None
 
 
-def tvmaze_aired_this_week(show_name: str, days_back: int) -> dict[str, str] | None:
+def tvmaze_aired_this_week(
+    show_name: str, days_back: int, show_id: int | None = None
+) -> dict[str, str] | None:
     """
     Return {episode_key: "S01E03 · Title (YYYY-MM-DD)"} for episodes that aired
     in the last `days_back` days, or None if the show can't be found on TVMaze.
+
+    Pass show_id to skip the name search. Ambiguous titles resolve to whatever
+    ranks first otherwise, which can silently point at the wrong show.
     """
-    results = _tvmaze_get(f"https://api.tvmaze.com/search/shows?q={quote_plus(show_name)}")
-    if not results:
-        return None
-    show_id = results[0]["show"]["id"]
+    if show_id is None:
+        results = _tvmaze_get(f"https://api.tvmaze.com/search/shows?q={quote_plus(show_name)}")
+        if not results:
+            return None
+        show_id = results[0]["show"]["id"]
 
     episodes = _tvmaze_get(f"https://api.tvmaze.com/shows/{show_id}/episodes")
     if not episodes:
@@ -373,8 +379,12 @@ def fmt_date(ts: int) -> str:
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else "unknown"
 
 
-def load_content_list() -> tuple[list[str], dict]:
-    """Load show list and download history. Auto-migrates plain-text format to JSON."""
+def load_content_list() -> tuple[list[str], dict[str, int], dict]:
+    """Load show list, TVMaze ids and download history.
+
+    Entries may be plain strings or {"name": ..., "tvmaze_id": ...}. tvcal
+    writes the second form; both are accepted. Auto-migrates plain text.
+    """
     if not CONTENT_LIST.exists():
         sys.exit(
             f"Content list not found: {CONTENT_LIST}\n"
@@ -389,11 +399,55 @@ def load_content_list() -> tuple[list[str], dict]:
         CONTENT_LIST.write_text(json.dumps(data, indent=2) + "\n")
         print(f"Migrated {CONTENT_LIST} to JSON format.\n")
     data.setdefault("last_downloaded", {})
-    return data.get("shows", []), data
+
+    names: list[str] = []
+    ids: dict[str, int] = {}
+    for item in data.get("shows", []):
+        if isinstance(item, str):
+            names.append(item)
+        elif isinstance(item, dict) and item.get("name"):
+            names.append(item["name"])
+            if item.get("tvmaze_id"):
+                ids[item["name"]] = int(item["tvmaze_id"])
+    return names, ids, data
 
 
 def save_content_list(data: dict) -> None:
     CONTENT_LIST.write_text(json.dumps(data, indent=2) + "\n")
+
+
+# ~/.content_list.json is shared between this Mac and linuxvm (tvcal also
+# writes it there). Rather than a background timer on either side, each
+# machine's copy of this script just syncs with the other whenever it runs
+# in list-driven mode - before reading and after writing - via two
+# one-directional `rsync -u` passes, so whichever side has the newer mtime
+# wins in both directions without needing a daemon anywhere.
+_SSH_KEY = Path("~/.ssh/id_ben_ed25519").expanduser()
+
+
+def _peer_host() -> str:
+    hostname = subprocess.run(
+        ["hostname", "-s"], capture_output=True, text=True, check=False
+    ).stdout.strip().lower()
+    return "ben@Ben.local" if hostname == "linuxvm" else "ben@linuxvm.local"
+
+
+def sync_content_list_with_peer() -> None:
+    """Best-effort two-way sync; an unreachable peer just leaves this run
+    working from whatever is already on disk, same as before this existed."""
+    if not _SSH_KEY.exists():
+        return
+    remote = f"{_peer_host()}:.content_list.json"
+    local = str(CONTENT_LIST)
+    ssh_cmd = f"ssh -i {_SSH_KEY} -o ConnectTimeout=5 -o BatchMode=yes"
+    for src, dst in ((local, remote), (remote, local)):
+        try:
+            subprocess.run(
+                ["rsync", "-au", "-e", ssh_cmd, src, dst],
+                capture_output=True, timeout=15, check=False,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return
 
 
 def prompt_yes_no(question: str) -> bool:
@@ -505,7 +559,8 @@ def _display_movie(show: str, scored: list[tuple[int, dict]]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _search_and_display(
-    show: str, is_movie: bool, cutoff: int, *, last_downloaded: dict | None = None
+    show: str, is_movie: bool, cutoff: int, *,
+    last_downloaded: dict | None = None, show_id: int | None = None
 ) -> list[str]:
     print(f"{'='*60}")
     print(f"  {show}")
@@ -513,7 +568,7 @@ def _search_and_display(
 
     expected = None
     if not is_movie:
-        expected = tvmaze_aired_this_week(show, DAYS_BACK)
+        expected = tvmaze_aired_this_week(show, DAYS_BACK, show_id)
         if expected:
             print(f"  TVMaze: {', '.join(sorted(expected.values()))}")
         else:
@@ -572,14 +627,18 @@ def main() -> None:
     else:
         if args.tv or args.movie:
             ap.error("--tv / --movie only apply when a query argument is given")
-        shows, data = load_content_list()
+        sync_content_list_with_peer()
+        shows, show_ids, data = load_content_list()
         if not shows:
             sys.exit("No shows found in content list.")
         ld = data["last_downloaded"]
         print(f"Searching piratebay.party — {len(shows)} show(s), last {DAYS_BACK} days\n")
         for show in shows:
-            queue.extend(_search_and_display(show, is_movie=False, cutoff=tv_cutoff, last_downloaded=ld))
+            queue.extend(_search_and_display(
+                show, is_movie=False, cutoff=tv_cutoff,
+                last_downloaded=ld, show_id=show_ids.get(show)))
             save_content_list(data)
+        sync_content_list_with_peer()
 
     if queue:
         print(f"\nSending {len(queue)} torrent(s) to Transmission…")
