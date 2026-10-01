@@ -28,8 +28,11 @@ get_content.py        the script
 test_get_content.py   offline unittest suite (python3 -m unittest)
 README.md             user-facing overview
 AGENTS.md             this file — all agent guidance lives here
-CLAUDE.md             pointer to this file only
 ```
+
+There is deliberately no `CLAUDE.md`: Claude Code (v2.1.277+) reads `AGENTS.md` directly,
+but only when no `CLAUDE.md`/`CLAUDE.local.md` exists in this directory or above it.
+Adding one would stop this file loading unless it contains an `@AGENTS.md` import.
 
 Not in the repo: `~/bin/content-list-rsync` on the Mac (see *Recreating the linuxvm → Mac
 sync access*).
