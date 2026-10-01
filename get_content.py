@@ -36,6 +36,10 @@ DAYS_BACK = 6
 # behind the newest one in the same season (re-uploads of old episodes).
 STALE_EPISODE_GAP = 6
 TRANSMISSION_HOST = "localhost"
+# Seeder bonus: log-scaled, reaching the cap at ~20 seeders. Big enough that a
+# well-seeded release can beat a slightly "better" one that will barely download.
+SEEDER_WEIGHT = 16
+SEEDER_CAP = 50
 HTTP_RETRIES = 1
 
 # Score weights. Tokens are matched against the lower-cased name with dots and
@@ -336,8 +340,12 @@ def score_torrent(torrent: dict, cutoff_ts: int, *, is_tv: bool = True) -> int |
              + _first_match(name, _RESOLUTION_PATTERNS)
              + _first_match(name, _AUDIO_PATTERNS))
 
+    if seeders == 0 and not is_tv:
+        # Dead in an all-time catalogue. TV keeps these: a fresh upload can show
+        # 0 until the site refreshes its counts, and seeded rivals still outscore it.
+        return None
     if seeders > 0:
-        score += min(20, int(math.log(seeders + 1) * 10))
+        score += min(SEEDER_CAP, int(math.log(seeders + 1) * SEEDER_WEIGHT))
 
     trusted = TRUSTED_TV_UPLOADERS if is_tv else TRUSTED_MOVIE_UPLOADERS
     if torrent.get("uploader") in trusted:

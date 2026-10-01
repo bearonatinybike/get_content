@@ -110,12 +110,23 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(self.score("Havc.24k"), 0)
 
     def test_movie_size_bonus_plateaus(self):
-        at = lambda gb: self.score("Movie.2020", size=int(gb * GB), is_tv=False)
-        self.assertEqual(at(1), 0)
-        self.assertEqual(at(4), 20)
-        self.assertEqual(at(6), 40)
-        self.assertEqual(at(8), 40)
+        at = lambda gb: self.score("Movie.2020", size=int(gb * GB), seeders=1, is_tv=False)
+        base = at(1)
+        self.assertEqual(at(4) - base, 20)
+        self.assertEqual(at(6) - base, 40)
+        self.assertEqual(at(8) - base, 40)
         self.assertIsNone(at(11))
+
+    def test_seeder_bonus(self):
+        seeds = lambda n: self.score("Show", seeders=n)
+        self.assertEqual(seeds(0), 0)
+        self.assertEqual(seeds(4), 25)
+        self.assertEqual(seeds(29), 50)    # capped
+        self.assertEqual(seeds(5000), 50)
+
+    def test_unseeded_movies_dropped_tv_kept(self):
+        self.assertIsNone(self.score("Movie.2020", seeders=0, is_tv=False))
+        self.assertEqual(self.score("Show.S01E01", seeders=0), 0)
 
     def test_movie_mode_rejects_episodes(self):
         self.assertIsNone(self.score("Show.S01E01.1080p", is_tv=False))

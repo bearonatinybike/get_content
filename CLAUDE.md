@@ -84,7 +84,8 @@ CODEC_SCORES      = {hevc/h265/x265: 80, h264/x264: 60, avc: 40}
 RESOLUTION_SCORES = {2160p: 80, 4k: 75, uhd: 70, 1080p: 60, 720p: 20}
 AUDIO_SCORES      = {atmos/truehd: 30, dts-hd ma/dts:x: 25, dts-hd: 20,
                      eac3/ddp/dd+: 15, dts: 10, aac/ac3: 5}
-seeder_bonus      = min(20, log(seeders+1) * 10)   # tiebreaker only
+seeder_bonus      = min(50, log(seeders+1) * 16)   # SEEDER_CAP / SEEDER_WEIGHT; cap at ~20 seeds
+zero_seeders      = movies dropped; TV kept (fresh uploads can show 0 before counts refresh)
 trusted_uploader  = +30 (TV: TvTeam/EZTV; movies: YTS variants/mkvCinemas/Pahe.in/FitGirl)
 movie_size_bonus  = linear 0→+40 across 2–6 GB, flat +40 from 6–10 GB
 movie_size_cap    = files > 10 GB excluded (remuxes)
@@ -92,7 +93,7 @@ movie_size_cap    = files > 10 GB excluded (remuxes)
 
 Key design decisions:
 - Tokens match only at a word start (`(?<![a-z0-9])`) — `ac3` doesn't fire inside `eac3`, `4k` not inside `24k` — but may be followed by anything (`DDP5.1`, `AAC2.0`).
-- Seeder bonus is capped at 20 so quality signals dominate.
+- Seeder bonus is log-scaled up to 50, so a well-seeded release can beat a slightly better-scored one that will barely download, while thousands of seeders can't outweigh codec + resolution.
 - Tokens within a table are matched first-hit in dict order, so most-specific first ("dts-hd ma" before "dts-hd" before "dts").
 - Trusted uploaders are split by context: TV uploaders don't get the bonus in movie searches and vice versa.
 - HD filter (`best_candidates`) runs *after* scoring for TV — a high-seeder 720p can never beat a low-seeder 1080p.
