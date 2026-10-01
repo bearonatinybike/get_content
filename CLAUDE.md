@@ -11,7 +11,8 @@ main()
  ├── sync_content_list_with_peer()   → rsync with linuxvm (list mode only)
  ├── load_content_list() / argparse  → shows + TVMaze ids + last_downloaded
  ├── per show: _search_and_display() → list[Pick]
- │    ├── tvmaze_aired_this_week()   → {} nothing aired (skip show) / None lookup failed
+ │    ├── tvmaze_episodes()          → all episodes (None = lookup failed)
+ │    │    └── aired_within()        → {} nothing aired (skip show); whole_seasons() → packs to offer
  │    ├── search_torrents()          → one search per aired episode, or one for the show
  │    ├── title filter               → drops results missing any query word
  │    ├── score_torrent()            → codec + resolution + audio + seeders + size
@@ -63,15 +64,25 @@ Key gotchas:
 Free API, no key required. Up to two calls per show:
 
 1. `GET https://api.tvmaze.com/search/shows?q={name}` via `tvmaze_find_show()` (skipped when the content list has a `tvmaze_id`). A trailing year (`Scrubs 2026`, `Scrubs (2001)`) is stripped from the query — TVMaze returns nothing with it left in — and used to pick the result that premiered that year; otherwise `results[0]`.
-2. `GET https://api.tvmaze.com/shows/{id}/episodes` → filter by `today - DAYS_BACK <= airdate <= today`; specials (`number: null`) are skipped. `tvmaze_episode()` instead picks one key regardless of date.
+2. `GET https://api.tvmaze.com/shows/{id}/episodes` → `tvmaze_episodes()` returns every numbered episode as `{key: Aired(label, runtime, airdate)}`; specials (`number: null`) are skipped. `aired_within()` then keeps `today - DAYS_BACK <= airdate <= today`.
 
-Returns `{episode_key: Aired(label="S01E03 · Title (YYYY-MM-DD)", runtime=minutes)}`, `{}` if the show was found but nothing aired (the show is skipped without searching TPB), or `None` if the lookup failed / show not found (falls back to date filtering + `_drop_stale_episodes()`). Keep those two cases distinct — conflating them made the fallback offer re-uploads of old episodes for shows on a break.
+`aired_within()` returning `{}` means the show was found but nothing aired (the show is skipped without searching TPB), or `None` if the lookup failed / show not found (falls back to date filtering + `_drop_stale_episodes()`). Keep those two cases distinct — conflating them made the fallback offer re-uploads of old episodes for shows on a break.
 
 The upper bound (`airdate <= today`) is essential — without it, future episodes appear as "Not on TPB yet" when they simply haven't aired. Expected keys ≤ `last_downloaded` are removed before searching, so already-grabbed episodes aren't reported missing.
 
-## Single-episode queries
+## Single-episode and season queries
 
-`get_content.py "Scrubs 2026 S02E01"` (TV mode, the default): `split_episode_query()` pulls the `S##E##` out of the query; the rest is the show name. That episode is looked up with `tvmaze_episode()` (any air date), searched as `"{show} {key}"` with no date window, and treated as the expected list (so its runtime feeds the bitrate check). Without the year, same-named series (Scrubs 2001 vs 2026) resolve to TVMaze's top hit and their releases can mix under one key.
+`get_content.py "Scrubs 2026 S02E01"` (TV mode, the default): `parse_query()` pulls the `S##E##` out of the query; the rest is the show name. That episode is looked up in `tvmaze_episodes()` (any air date), searched as `"{show} {key}"` with no date window, and treated as the expected list (so its runtime feeds the bitrate check). Without the year, same-named series (Scrubs 2001 vs 2026) resolve to TVMaze's top hit and their releases can mix under one key.
+
+`get_content.py "Neagley S01"` (or `Season 1`): the whole season, any date — every aired episode of it is the expected list, and a season pack is offered first. When a plain show query finds nothing aired in the window, it prints the latest episode and suggests this form.
+
+## Season packs
+
+`pack_season(name)` recognises single-season packs (`S01` / `Season 1` with no episode code; names spanning seasons like `S01-S03` aren't packs). Packs are offered — before that season's episode prompts — only for seasons in `packs`:
+- season queries (`"Show S01"`), and
+- `whole_seasons()`: in list/weekly mode, seasons with >1 episode where *every* TVMaze episode of the season is in the (post-`last_downloaded`) expected list, i.e. a binge drop inside the window.
+
+Each pack season gets one `"{show} S01"` search on top of the per-episode searches. A pack's runtime for the bitrate floor is the sum of its episodes' runtimes. Taking a pack queues one `Pick` whose `ep_key` is the season's last episode (so history jumps to it) and skips that season's episode prompts; declining falls through to per-episode prompts. `record_progress` takes the max key per show, since pack picks precede episode picks.
 
 ## Episode keys
 
@@ -85,15 +96,18 @@ Date-filter fallback only (`group_by_episode(drop_stale=expected is None)`). Wit
 
 ```python
 CODEC_SCORES      = {hevc/h265/x265: 70, h264/x264: 60, avc: 40}
-SOURCE_SCORES     = {web-dl/web/bluray: 30, webrip: 15, brrip/bdrip: 10, hdtv: 5}   # whole words
+SOURCE_SCORES     = {web-dl/web/bluray: 30, webrip: 10, brrip/bdrip: 10, hdtv/dcprip/dcp: 5}   # whole words
+                    # WEB/WEB-DL + x264/x265 encoder tag = re-encode → WEB_ENCODE_SCORE (10)
 RESOLUTION_SCORES = {2160p: 80, 4k: 75, uhd: 70, 1080p: 60, 720p: 20}
 AUDIO_SCORES      = {atmos/truehd: 30, dts-hd ma/dts:x: 25, dts-hd: 20,
-                     eac3/ddp/dd+: 15, dts: 10, aac/ac3: 5}
+                     eac3/ddp/dd+: 15, dts: 10, aac/ac3: 5}            # movies only
+foreign           = −40 for any FOREIGN_WORDS (ita, multi, dual, hindi, vff, nordic, …)
+cinema recordings = dropped: any CINEMA_RECORDING_WORDS (cam, ts, hdts, telesync, tc, …)
 seeder_bonus      = min(50, log(seeders+1) * 16)   # SEEDER_CAP / SEEDER_WEIGHT; cap at ~20 seeds
 zero_seeders      = movies dropped; TV kept (fresh uploads can show 0 before counts refresh)
 trusted_uploader  = +30 (TV: TvTeam/EZTV; movies: YTS variants/mkvCinemas/Pahe.in/FitGirl)
-movie_size_bonus  = linear 0→+40 across 2–6 GB, flat +40 from 6–10 GB
-movie_size_cap    = files > 10 GB excluded (remuxes)
+movie_size_bonus  = linear 0→+40 then flat, per MOVIE_SIZE_GB: 2160p 6→18 GB, else 2→6 GB
+movie_size_cap    = 2160p > 30 GB, else > 10 GB excluded (remuxes)
 overcompressed    = −40 when size / TVMaze runtime is under MIN_MBPS for the resolution
                     (1080p: HEVC 1.8 / H.264 3.0 Mbit/s; 720p 0.9/1.5; 2160p 6/12)
 ties              = broken by seeder count (rank_key)
@@ -102,7 +116,11 @@ ties              = broken by seeder count (rank_key)
 Key design decisions:
 - Tokens match only at a word start (`(?<![a-z0-9])`) — `ac3` doesn't fire inside `eac3`, `4k` not inside `24k` — but codec/audio tokens may be followed by anything (`DDP5.1`, `AAC2.0`). Source tokens are whole words, so `web` doesn't match `webcam`.
 - HEVC gets only +10 over H.264. At 1080p most HEVC releases are re-encodes of an H.264 WEB-DL (`x265` in the name = encoded by the group; `H.265`/`HEVC` alone can be the untouched stream, common at 2160p), so they can't beat their source. Efficiency is rewarded only as a tiebreak; over-squeezed encodes (e.g. MeGusta's ~1.2 Mbit/s 1080p) are caught by the bitrate floor.
-- Source outranks codec: an untouched WEB-DL beats a re-encode of it.
+- Source outranks codec: an untouched WEB-DL beats a re-encode of it. Groups often keep `WEB-DL` in the name of their own encode (`1080P ATVP WEB-DL … X265 POOTLED`, QxR, BONE); the `x264`/`x265` encoder tag is what gives it away, so that combination scores as a rip.
+- Audio is ignored for TV: every WEB release of an episode carries the stream's own audio, and scene names (e.g. CAKES) often omit it, so tags only rewarded groups that write them down. For movies it still separates lossless Blu-ray audio from re-encoded AAC.
+- Foreign/multi-language releases (TBK's `ENG.ITA`, `MULTi`, `Dual`, `Hindi`, …) lose 40 rather than being dropped — the extra track is often the default, but it can still be the only decent copy. Matched as whole words of the name; a show title containing one of these words would be penalised too.
+- Cinema recordings (CAM/TS/Telesync/HDTS/TC) are dropped outright: they scored ~200 on resolution + seeders and topped movie searches before the real release. DCPRip leaks (from the cinema's digital master) are proper picture and stay, at source +5.
+- Not detectable from names: two different films sharing a title and year ("The Odyssey 2026 … NOT The Chris Nolan FILM"). Check the size, uploader and details page.
 - The bitrate floor needs a runtime, so it only applies when TVMaze matched the episode. TVMaze runtimes are slot lengths (30 for a ~22-min sitcom), which is why the floors sit below the real thresholds.
 - Seeder bonus is log-scaled up to 50, so a well-seeded release can beat a slightly better-scored one that will barely download, while thousands of seeders can't outweigh codec + resolution.
 - Tokens within a table are matched first-hit in dict order, so most-specific first ("dts-hd ma" before "dts-hd" before "dts").
@@ -111,7 +129,7 @@ Key design decisions:
 
 ## Title relevance filter
 
-Results must contain every word of the cleaned query as a case-insensitive substring. `clean_query` strips straight *and* curly apostrophes (`‘’`) before turning other punctuation into spaces — otherwise `Grey’s` becomes `Grey s` and the token `s` matches everything.
+`title_matches()`: the query's words must appear in the name as a consecutive phrase of whole words, after both are lower-cased, stripped of straight and curly apostrophes, and split on any other punctuation (so `Spider-Man` matches `Spider.Man`, `Grey’s` matches `Greys`). Looser matching was wrong: as substrings or scattered words, "Toy Story 5" matched "Toy Story 4 … 5.1". Release names lead with the title, so the phrase is always there for a real match. `clean_query` (for the search URL) likewise strips curly apostrophes — otherwise `Grey’s` becomes `Grey s`.
 
 ## Fake-release detection
 

@@ -38,6 +38,9 @@ get_content.py "Severance" --tv
 # One specific episode, any air date (a year picks between same-named series)
 get_content.py "Scrubs 2026 S02E01"
 
+# A whole season, any air date (offers a season pack first)
+get_content.py "Neagley S01"
+
 # Search for a movie (all-time, top 5 results by score)
 get_content.py "Dune Part Two" --movie
 
@@ -58,13 +61,14 @@ Each torrent gets a score before being offered:
 | h264 / x264 | +60 |
 | AVC | +40 |
 | Source: WEB-DL / WEB / BluRay | +30 |
-| Source: WEBRip | +15 |
-| Source: HDTV | +5 |
+| Source: WEBRip, or WEB-DL re-encoded (x264/x265 tag) | +10 |
+| Source: HDTV / DCPRip | +5 |
+| Foreign or multi-language (ITA, MULTi, Dual, Hindi, …) | −40 |
 | Bitrate below the floor for its resolution (TV, needs TVMaze runtime) | −40 |
 | 2160p / 4K / UHD | +75–80 |
 | 1080p | +60 |
 | 720p | +20 |
-| Atmos / TrueHD | +30 |
+| Audio (movies only): Atmos / TrueHD | +30 |
 | DTS-HD MA / DTS:X | +25 |
 | DTS-HD | +20 |
 | EAC3 / DDP / DD+ | +15 |
@@ -72,11 +76,13 @@ Each torrent gets a score before being offered:
 | AAC / AC3 | +5 |
 | Seeders (log scale, full at ~20) | up to +50 |
 | Trusted uploader (context-aware) | +30 |
-| Movie size 2–6 GB, then flat to 10 GB | up to +40 |
+| Movie size 2–6 GB (4K: 6–18 GB), then flat to the cap | up to +40 |
 
-Results are filtered to only those whose names contain every word of the search query, so searching "Project Hail Mary" won't surface "The Project" or "Hail Caesar".
+Results are filtered to only those whose names contain the search query as a phrase (ignoring punctuation and case), so searching "Project Hail Mary" won't surface "The Project" or "Hail Caesar".
 
-For TV, only HD results (1080p+) are shown per episode. 720p is a fallback with a warning. For movies, results over 10 GB (remuxes) and results with no seeders are excluded.
+Cinema recordings (CAM, Telesync, HDTS, …) are never offered.
+
+For TV, only HD results (1080p+) are shown per episode. 720p is a fallback with a warning. For movies, results over 10 GB (30 GB for 4K) — i.e. remuxes — and results with no seeders are excluded.
 
 ## Transmission
 
