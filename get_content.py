@@ -71,12 +71,15 @@ _UNTOUCHED_WEB = {"web-dl", "webdl", "web"}
 CINEMA_RECORDING_WORDS = frozenset({
     "cam", "camrip", "hdcam", "ts", "hdts", "telesync", "tc", "hdtc", "telecine",
 })
+# Long enough to also catch when run into a neighbouring tag ("TELESYNCx264").
+_CINEMA_RECORDING_SUBSTRINGS = ("telesync", "telecine", "hdcam", "camrip")
 # Non-English or multi-language releases. The extra tracks are often set as
 # the default, so these lose FOREIGN_PENALTY. Whole words of the name.
 FOREIGN_WORDS = frozenset({
     "ita", "multi", "multidub", "dual", "daul", "dubbed", "hindi", "hin", "tamil",
     "vf2", "vff", "vfq", "french", "truefrench", "german", "ger", "deu",
     "spanish", "esp", "spa", "latino", "swesub", "nordic", "rus", "ukr",
+    "vostfr", "vost",
 })
 FOREIGN_PENALTY = 40
 # "AI upscale" releases are SD/HD blown up to 2160p+: fake 4K, dropped.
@@ -118,6 +121,8 @@ MIN_MBPS = {
     "720p":  (0.9, 1.5),
 }
 OVERCOMPRESSED_PENALTY = 40
+# Movies have no TVMaze runtime; the bitrate floor assumes a typical length.
+MOVIE_ASSUMED_RUNTIME = 100
 # Movie sizes in GB as (bonus starts, bonus full, cap) per resolution: the
 # bonus rises linearly to +40 then stays flat; above the cap is dropped
 # (remuxes). 4K needs roughly 3x the bits of 1080p.
@@ -516,6 +521,8 @@ def score_torrent(
     words = set(_words(torrent["name"]).split())
     if words & (CINEMA_RECORDING_WORDS | UPSCALE_WORDS):
         return None
+    if any(s in torrent["name"].lower() for s in _CINEMA_RECORDING_SUBSTRINGS):
+        return None
     name = re.sub(r"[._]", " ", torrent["name"].lower())
     seeders = torrent.get("seeders", 0)
 
@@ -536,6 +543,8 @@ def score_torrent(
 
     size = torrent.get("size", 0)
     floor = _bitrate_floor(name)
+    if not is_tv and not runtime_min:
+        runtime_min = MOVIE_ASSUMED_RUNTIME
     if runtime_min and size and floor:
         mbps = size * 8 / (runtime_min * 60) / 1e6
         if mbps < floor:

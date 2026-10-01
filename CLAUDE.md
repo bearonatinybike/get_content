@@ -104,7 +104,8 @@ AUDIO_SCORES      = {atmos/truehd: 30, dts-hd ma/dts:x: 25, dts-hd: 20,
 foreign           = −40 for any FOREIGN_WORDS (ita, multi, dual, hindi, vff, nordic, …)
 dynamic range     = Dolby Vision (dv/dovi/"dolby vision") +20, else HDR/HDR10/HDR10+ +10
 upscales          = dropped: any UPSCALE_WORDS ("AI upscale" fake 4K)
-cinema recordings = dropped: any CINEMA_RECORDING_WORDS (cam, ts, hdts, telesync, tc, …)
+cinema recordings = dropped: any CINEMA_RECORDING_WORDS (cam, ts, hdts, telesync, tc, …), or the long ones
+                    run into another tag ("TELESYNCx264")
 seeder_bonus      = min(50, log(seeders+1) * 16)   # SEEDER_CAP / SEEDER_WEIGHT; cap at ~20 seeds
 zero_seeders      = movies dropped; TV kept (fresh uploads can show 0 before counts refresh)
 trusted_uploader  = +30 (TV: TvTeam/EZTV; movies: YTS variants/mkvCinemas/Pahe.in/FitGirl)
@@ -123,7 +124,7 @@ Key design decisions:
 - Foreign/multi-language releases (TBK's `ENG.ITA`, `MULTi`, `Dual`, `Hindi`, …) lose 40 rather than being dropped — the extra track is often the default, but it can still be the only decent copy. Matched as whole words of the name; a show title containing one of these words would be penalised too.
 - Cinema recordings (CAM/TS/Telesync/HDTS/TC) are dropped outright: they scored ~200 on resolution + seeders and topped movie searches before the real release. DCPRip leaks (from the cinema's digital master) are proper picture and stay, at source +5.
 - Not detectable from names: two different films sharing a title and year ("The Odyssey 2026 … NOT The Chris Nolan FILM"). Check the size, uploader and details page.
-- The bitrate floor needs a runtime, so it only applies when TVMaze matched the episode. TVMaze runtimes are slot lengths (30 for a ~22-min sitcom), which is why the floors sit below the real thresholds.
+- The bitrate floor needs a runtime. TV uses TVMaze's (so only when it matched the episode); movies assume MOVIE_ASSUMED_RUNTIME (100 min), which catches e.g. a 2.4 GB "2160p" encode. TVMaze runtimes are slot lengths (30 for a ~22-min sitcom), which is why the floors sit below the real thresholds.
 - Seeder bonus is log-scaled up to 50, so a well-seeded release can beat a slightly better-scored one that will barely download, while thousands of seeders can't outweigh codec + resolution.
 - Tokens within a table are matched first-hit in dict order, so most-specific first ("dts-hd ma" before "dts-hd" before "dts").
 - Trusted uploaders are split by context: TV uploaders don't get the bonus in movie searches and vice versa.

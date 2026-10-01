@@ -137,10 +137,10 @@ class ScoringTests(unittest.TestCase):
 
     def test_movie_size_scales_for_4k(self):
         at = lambda name, gb: self.score(name, size=int(gb * GB), seeders=1, is_tv=False)
-        base = at("Movie 2160p", 5)
-        self.assertEqual(at("Movie 2160p", 12) - base, 20)
-        self.assertEqual(at("Movie 2160p", 18.3) - base, 40)
-        self.assertIsNone(at("Movie 2160p", 31))
+        base = at("Movie 2160p HEVC", 5)
+        self.assertEqual(at("Movie 2160p HEVC", 12) - base, 20)
+        self.assertEqual(at("Movie 2160p HEVC", 18.3) - base, 40)
+        self.assertIsNone(at("Movie 2160p HEVC", 31))
         self.assertIsNotNone(at("Movie 1080p", 11.8))   # untouched 1080p WEB-DL
         self.assertIsNone(at("Movie 1080p", 17))
 
@@ -184,6 +184,13 @@ class ScoringTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIsNone(self.score(name, seeders=10, is_tv=False))
         self.assertIsNotNone(self.score("Tsunami.2004.1080p", seeders=10, is_tv=False))
+        self.assertIsNone(self.score("Movie.2026.1080p.WEBRip.TELESYNCx264.DKS", seeders=10, is_tv=False))
+
+    def test_movie_bitrate_floor(self):
+        at = lambda name, gb: self.score(name, size=int(gb * GB), seeders=5, is_tv=False)
+        # 2.4 GB of 2160p over ~100 min is ~3.4 Mbit/s: far below the 4K floor
+        self.assertEqual(at("Movie 2026 2160p HEVC", 2.4), at("Movie 2026 2160p HEVC", 5.0) - gc.OVERCOMPRESSED_PENALTY)
+        self.assertEqual(at("Movie 2026 1080p HEVC", 1.5), at("Movie 2026 1080p HEVC", 1.9))
 
     def test_dynamic_range(self):
         base = self.score("Movie.2026.2160p.WEB-DL.H265", is_tv=False, seeders=1)
@@ -201,7 +208,7 @@ class ScoringTests(unittest.TestCase):
 
     def test_foreign_penalty(self):
         base = self.score("Show.S01E01.1080p.WEB-DL.H265-TBK")
-        for tag in ("ENG.ITA", "MULTi", "Dual", "Hindi.Dubbed", "FRENCH", "NORDiC", "VFF"):
+        for tag in ("ENG.ITA", "MULTi", "Dual", "Hindi.Dubbed", "FRENCH", "NORDiC", "VFF", "VOSTFR"):
             with self.subTest(tag=tag):
                 self.assertEqual(self.score(f"Show.S01E01.1080p.WEB-DL.{tag}.H265-TBK"),
                                  base - gc.FOREIGN_PENALTY)

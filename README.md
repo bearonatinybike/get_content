@@ -66,7 +66,7 @@ Each torrent gets a score before being offered:
 | Foreign or multi-language (ITA, MULTi, Dual, Hindi, …) | −40 |
 | Dolby Vision | +20 |
 | HDR / HDR10 / HDR10+ (without DV) | +10 |
-| Bitrate below the floor for its resolution (TV, needs TVMaze runtime) | −40 |
+| Bitrate below the floor for its resolution (TV: TVMaze runtime; movies: assume 100 min) | −40 |
 | 2160p / 4K / UHD | +75–80 |
 | 1080p | +60 |
 | 720p | +20 |
