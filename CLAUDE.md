@@ -101,10 +101,10 @@ SOURCE_SCORES     = {web-dl/web/bluray: 30, webrip: 10, brrip/bdrip: 10, hdtv/dc
 RESOLUTION_SCORES = {2160p: 80, 4k: 75, uhd: 70, 1080p: 60, 720p: 20}
 AUDIO_SCORES      = {atmos/truehd: 30, dts-hd ma/dts:x: 25, dts-hd: 20,
                      eac3/ddp/dd+: 15, dts: 10, aac/ac3: 5}            # movies only
-foreign           = −40 for any FOREIGN_WORDS (ita, multi, dual, hindi, vff, nordic, …)
+foreign           = −40 for any FOREIGN_WORDS (ita, multi, dual, hindi, vff, nordic, vostfr, hc, …)
 dynamic range     = Dolby Vision (dv/dovi/"dolby vision") +20, else HDR/HDR10/HDR10+ +10
 upscales          = dropped: any UPSCALE_WORDS ("AI upscale" fake 4K)
-cinema recordings = dropped: any CINEMA_RECORDING_WORDS (cam, ts, hdts, telesync, tc, …), or the long ones
+cinema recordings = dropped: any CINEMA_RECORDING_WORDS (cam, ts, hdts, telesync, tc, pre/predvd, …), or the long ones
                     run into another tag ("TELESYNCx264")
 seeder_bonus      = min(50, log(seeders+1) * 16)   # SEEDER_CAP / SEEDER_WEIGHT; cap at ~20 seeds
 zero_seeders      = movies dropped; TV kept (fresh uploads can show 0 before counts refresh)

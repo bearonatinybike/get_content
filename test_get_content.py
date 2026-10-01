@@ -185,6 +185,9 @@ class ScoringTests(unittest.TestCase):
                 self.assertIsNone(self.score(name, seeders=10, is_tv=False))
         self.assertIsNotNone(self.score("Tsunami.2004.1080p", seeders=10, is_tv=False))
         self.assertIsNone(self.score("Movie.2026.1080p.WEBRip.TELESYNCx264.DKS", seeders=10, is_tv=False))
+        self.assertIsNone(self.score("Spider-Man: Brand New Day 2026.1080p.HQ Pre.Multi.AAC 2.0.x264", seeders=10, is_tv=False))
+        self.assertIsNone(self.score("Movie.2026.1080p.PreDVDRip.x264", seeders=10, is_tv=False))
+        self.assertIsNotNone(self.score("Presumed.Innocent.1990.1080p", seeders=10, is_tv=False))
 
     def test_movie_bitrate_floor(self):
         at = lambda name, gb: self.score(name, size=int(gb * GB), seeders=5, is_tv=False)
@@ -208,7 +211,7 @@ class ScoringTests(unittest.TestCase):
 
     def test_foreign_penalty(self):
         base = self.score("Show.S01E01.1080p.WEB-DL.H265-TBK")
-        for tag in ("ENG.ITA", "MULTi", "Dual", "Hindi.Dubbed", "FRENCH", "NORDiC", "VFF", "VOSTFR"):
+        for tag in ("ENG.ITA", "MULTi", "Dual", "Hindi.Dubbed", "FRENCH", "NORDiC", "VFF", "VOSTFR", "HC"):
             with self.subTest(tag=tag):
                 self.assertEqual(self.score(f"Show.S01E01.1080p.WEB-DL.{tag}.H265-TBK"),
                                  base - gc.FOREIGN_PENALTY)

@@ -70,6 +70,7 @@ _UNTOUCHED_WEB = {"web-dl", "webdl", "web"}
 # real release exists, and often mislabelled, so they're dropped outright.
 CINEMA_RECORDING_WORDS = frozenset({
     "cam", "camrip", "hdcam", "ts", "hdts", "telesync", "tc", "hdtc", "telecine",
+    "pre", "predvd", "predvdrip",   # "HQ Pre": pre-release = recorded in a cinema
 })
 # Long enough to also catch when run into a neighbouring tag ("TELESYNCx264").
 _CINEMA_RECORDING_SUBSTRINGS = ("telesync", "telecine", "hdcam", "camrip")
@@ -80,6 +81,7 @@ FOREIGN_WORDS = frozenset({
     "vf2", "vff", "vfq", "french", "truefrench", "german", "ger", "deu",
     "spanish", "esp", "spa", "latino", "swesub", "nordic", "rus", "ukr",
     "vostfr", "vost",
+    "hc",   # hardcoded (burned-in) subtitles, usually Korean
 })
 FOREIGN_PENALTY = 40
 # "AI upscale" releases are SD/HD blown up to 2160p+: fake 4K, dropped.
