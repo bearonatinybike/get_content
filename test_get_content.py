@@ -158,6 +158,21 @@ class ScoringTests(unittest.TestCase):
         self.assertTrue(gc.title_matches("[TGx] Runner.2026.1080p.WEB", "Runner 2026"))
         self.assertTrue(gc.title_matches("www.Torrenting.com - Runner.2026.1080p", "Runner 2026"))
 
+    def test_tv_title_needs_code_next(self):
+        m = gc.tv_title_matches
+        self.assertTrue(m("Lanterns.2026.S01E07.2160p.AMZN.WEB-DL", "Lanterns"))
+        self.assertTrue(m("Ghosts.US.S05E01.1080p", "Ghosts"))
+        self.assertTrue(m("Neagley (2026) S01 (1080p AMZN WEB-DL x265) [QxR]", "Neagley"))
+        self.assertTrue(m("Neagley 2026 Season 1 Complete 1080p WEB x264 [i_c]", "Neagley"))
+        self.assertTrue(m("South Park - S29E02 - Billionaire Weenietown -2160p", "South Park"))
+        self.assertTrue(m("Its Always Sunny in Philadelphia S18E08 1080p WEB h264-ETHEL",
+                          "It's Always Sunny in Philadelphia"))
+        self.assertTrue(m("Scrubs 2026 S02E01 1080p WEB h264-ETHEL", "Scrubs 2026"))
+        self.assertTrue(m("Scrubs.S02E01.720p", "Scrubs"))
+        self.assertFalse(m("War of the Worlds S01E01 1080p", "War"))
+        self.assertFalse(m("War of the Worlds (1988) S01-S02 (480p DVD x265) [QxR]", "War"))
+        self.assertFalse(m("The Simpsons Movie 2007 1080p", "The Simpsons"))
+
     def test_movie_mode_rejects_episodes(self):
         self.assertIsNone(self.score("Show.S01E01.1080p", is_tv=False))
 
@@ -209,12 +224,22 @@ class ScoringTests(unittest.TestCase):
         self.assertIsNone(self.score("South Park - S29E02 - 2160p HDR Ai Upscale 5.1 MKV -Mesc"))
         self.assertIsNone(self.score("Movie 2026 4K Upscaled", is_tv=False, seeders=5))
 
-    def test_foreign_penalty(self):
+    def test_language_penalties(self):
         base = self.score("Show.S01E01.1080p.WEB-DL.H265-TBK")
-        for tag in ("ENG.ITA", "MULTi", "Dual", "Hindi.Dubbed", "FRENCH", "NORDiC", "VFF", "VOSTFR", "HC"):
+        cases = {
+            # can't be fixed at playback, or no English at all
+            "Hindi.Dubbed": gc.FOREIGN_PENALTY, "Ukr.Dub": gc.FOREIGN_PENALTY,
+            "HC": gc.FOREIGN_PENALTY, "VOSTFR": gc.FOREIGN_PENALTY,
+            "FRENCH": gc.FOREIGN_PENALTY, "iTA": gc.FOREIGN_PENALTY, "TRUEFRENCH": gc.FOREIGN_PENALTY,
+            # extra tracks next to the English original
+            "ENG.ITA": gc.MULTI_LANGUAGE_PENALTY, "MULTi": gc.MULTI_LANGUAGE_PENALTY,
+            "MULTi.FRE.LAT": gc.MULTI_LANGUAGE_PENALTY, "Dual": gc.MULTI_LANGUAGE_PENALTY,
+            "NORDiC": gc.MULTI_LANGUAGE_PENALTY, "iTA.EnG": gc.MULTI_LANGUAGE_PENALTY,
+            "Dual.Audio.Hindi.Dubbed": gc.FOREIGN_PENALTY,
+        }
+        for tag, penalty in cases.items():
             with self.subTest(tag=tag):
-                self.assertEqual(self.score(f"Show.S01E01.1080p.WEB-DL.{tag}.H265-TBK"),
-                                 base - gc.FOREIGN_PENALTY)
+                self.assertEqual(self.score(f"Show.S01E01.1080p.WEB-DL.{tag}.H265-TBK"), base - penalty)
         self.assertEqual(self.score("Show.S01E01.1080p.WEB-DL.ENG.H265"), base)
 
     def test_overcompressed_penalty(self):

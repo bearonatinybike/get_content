@@ -72,8 +72,11 @@ the scoring encodes. When they conflict with a score, the score is wrong.
 2. **A real release.** Never a cinema recording (CAM/TS/Telesync/HDTS/"HQ Pre"), an
    "AI upscale", or a dead torrent (movies). If the only results are cinema copies, the
    correct answer is *nothing*.
-3. **English.** No dual/multi-language or foreign-subtitled releases when an English one
-   exists — the extra track is often the default.
+3. **English.** Never dubbed-only or burned-in-subtitle releases when a clean one exists.
+   Multi-language releases that keep the English original are only mildly worse: Jellyfin
+   user `ben` has preferred audio = English and "play default track" off, so it plays
+   English whatever the file's default is. (User `Josh` has no preference and plays the
+   file's default track — multi-language files can start in French/Spanish for him.)
 4. **Untouched source over re-encodes.** The streaming service's own file (WEB-DL /
    scene "WEB") or a Blu-ray-sourced encode beats a group's re-encode of the WEB-DL.
 5. **4K Dolby Vision is welcome.** The TV plays 2160p DV, so 2160p is preferred, DV over
@@ -96,7 +99,8 @@ main()
  │    │    └── whole_seasons()        seasons dropped all at once → offer packs
  │    ├── search_torrents()           one search per pack season and per aired episode,
  │    │                               or one for the title (movies / fallback)
- │    ├── title_matches()             name must start with the title
+ │    ├── title_matches() / tv_title_matches()   name must start with the title
+ │    │                               (TV: then year/country, then the S##E## code)
  │    ├── score_torrent()             see Scoring; None = never offer
  │    └── _display_tv() / _display_movie()
  │         ├── season packs first (_offer), then per-episode prompts
@@ -233,6 +237,14 @@ Looser rules all failed on real searches:
 Checked across 20 earlier searches: the start anchor removed only other titles, never a
 release of the one searched.
 
+**TV is stricter** (`tv_title_matches()`): after the title come at most a year
+(`19xx`/`20xx`) and/or a country tag (`US UK AU NZ CA`), then the season/episode code
+(`S01E07`, `S01`, `Season 1`) — the shape every TV release name has (`Lanterns.2026.S01E07`,
+`Ghosts.US.S05E01`, `Neagley (2026) S01`). This stops short titles matching longer ones:
+"War" vs "War of the Worlds S01E01". Checked on 21 TV searches: picks identical; the only
+releases removed were films (Severance 2006, Ghosts of Mars), other titles, and packs the
+script never offers (multi-season, episode ranges).
+
 `clean_query()` (for the search URL) strips straight and curly apostrophes before turning
 other punctuation into spaces; otherwise `Grey’s` → `Grey s` and the token `s` matches
 everything.
@@ -263,9 +275,12 @@ Points
   dynamic range      Dolby Vision (dv, dovi, "dolby vision") +20, else hdr/hdr10/hdr10plus +10
   audio (movies)     atmos/truehd 30 · dts-hd ma/dts:x 25 · dts-hd 20 · eac3/ddp/dd+ 15
                      · dts 10 · aac/ac3 5
-  foreign            −40 for FOREIGN_WORDS: ita multi multidub dual daul dubbed hindi hin tamil
-                     vf2 vff vfq french truefrench german ger deu spanish esp spa latino swesub
-                     nordic rus ukr vostfr vost hc
+  language           −40 dubbed or burned-in subs (DUBBED_OR_BURNED_IN_WORDS: dub dubbed hc
+                     vostfr vost swesub), or a foreign language with no English
+                     (FOREIGN_LANGUAGE_WORDS: ita hindi hin tamil french truefrench fre vf2 vff
+                     vfq german ger deu spanish esp spa latino lat rus ukr)
+                     −15 extra tracks beside English (MULTI_LANGUAGE_WORDS: multi multidub dual
+                     daul nordic; or a foreign language word plus eng/english)
   seeders            min(50, log(seeders+1) × 16)  — full at ~20 seeders
   trusted uploader   +30  (TV: TvTeam, EZTV; movies: YTS variants, mkvCinemas, Pahe.in, FitGirl)
   over-compressed    −40 if size ÷ runtime < MIN_MBPS (Mbit/s, HEVC / H.264):
@@ -288,8 +303,11 @@ Why each rule exists (the example that drove it is in the *Regression set*):
   scene names (CAKES) often omit it, so audio tags only rewarded groups that write them
   down — enough to push re-encodes above the untouched file. Movies keep audio: lossless
   Blu-ray tracks vs re-encoded AAC is a real difference.
-- **Foreign is a penalty, not a drop** — it can be the only decent copy. Whole words of
-  the name, so a title containing one (e.g. a show called "Dual …") would be hit too.
+- **Language is a penalty, not a drop** — it can be the only decent copy. Dubs and
+  burned-in subtitles can't be fixed at playback (−40); extra audio tracks next to the
+  English original can (−15), because Jellyfin picks the preferred audio language
+  (Obsession 2026: the only DV 4K copy is `MULTi.FRE.LAT` and is the right pick). Whole
+  words of the name, so a title containing one (e.g. a show called "Dual …") is hit too.
 - **Cinema recordings and upscales are drops.** Before a film's digital release they're
   all there is and they scored ~200 on resolution + seeders, topping the list. DCPRip
   (leaked cinema digital master) is real picture and stays at +5.
@@ -473,6 +491,11 @@ Run each with `< /dev/null`.
 | `"Masters of the Universe 2026" --movie` | `2160p AMZN WEB-DL … DV HDR … FLUX` | `TELESYNCx264` dropped, VOSTFR penalised |
 | `"Disclosure Day 2026" --movie` | `2160p iT WEB-DL DV HDR10+ … BTM` | seeder tiebreak vs QxR |
 | `"The Death of Robin Hood 2026" --movie` | `SDR 2160p AMZN WEB-DL … SCOPE` (no HDR version exists) | `HC` penalised |
+| `"The Amazing Race"`, `"The Ark"` | RAWR `1080p AMZN WEB-DL … H 264` | untouched WEB default |
+| `"War"` (S01E01 aired today) | nothing; never "War of the Worlds" | TV title needs the code next |
+| `"Mutiny 2026" --movie` | `2160p iT WEB-DL DDP5.1 HDR H265-BYNDR` (no DV version exists) | HDR bonus |
+| `"Backrooms 2026" --movie` | `2160p iT WEB-DL DV HDR10+ … BTM` (QxR UHD BluRay equally good) | DV 4K |
+| `"Obsession 2026" --movie` | `2160p WEB-DL UNRATED DV HDR10+ MULTi FRE LAT … BTM` | multi-language −15, not −40 |
 | `"Spider-Man: Brand New Day" --movie` | **nothing** — still in cinemas | "HQ Pre" = cinema recording |
 | `"The Odyssey 2026" --movie` | **nothing** (Nolan's film is cinema-only) — but the script offers Kitsune | known limitation |
 

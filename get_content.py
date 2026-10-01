@@ -74,16 +74,26 @@ CINEMA_RECORDING_WORDS = frozenset({
 })
 # Long enough to also catch when run into a neighbouring tag ("TELESYNCx264").
 _CINEMA_RECORDING_SUBSTRINGS = ("telesync", "telecine", "hdcam", "camrip")
-# Non-English or multi-language releases. The extra tracks are often set as
-# the default, so these lose FOREIGN_PENALTY. Whole words of the name.
-FOREIGN_WORDS = frozenset({
-    "ita", "multi", "multidub", "dual", "daul", "dubbed", "hindi", "hin", "tamil",
-    "vf2", "vff", "vfq", "french", "truefrench", "german", "ger", "deu",
-    "spanish", "esp", "spa", "latino", "swesub", "nordic", "rus", "ukr",
-    "vostfr", "vost",
-    "hc",   # hardcoded (burned-in) subtitles, usually Korean
+# Language. All matched as whole words of the name.
+# - Can't be fixed at playback (dubbed-only audio, burned-in subtitles) or has
+#   no English at all: FOREIGN_PENALTY.
+# - Extra language tracks alongside the English original: MULTI_LANGUAGE_PENALTY.
+#   Jellyfin plays the user's preferred audio language (English) whatever the
+#   file's default track is, so these are only mildly worse.
+DUBBED_OR_BURNED_IN_WORDS = frozenset({
+    "dub", "dubbed",
+    "hc",                    # hardcoded subtitles, usually Korean
+    "vostfr", "vost",        # French subtitles, typically burned in
+    "swesub",
 })
+FOREIGN_LANGUAGE_WORDS = frozenset({
+    "ita", "hindi", "hin", "tamil", "french", "truefrench", "fre", "vf2", "vff", "vfq",
+    "german", "ger", "deu", "spanish", "esp", "spa", "latino", "lat", "rus", "ukr",
+})
+MULTI_LANGUAGE_WORDS = frozenset({"multi", "multidub", "dual", "daul", "nordic"})
+ENGLISH_WORDS = frozenset({"eng", "english"})
 FOREIGN_PENALTY = 40
+MULTI_LANGUAGE_PENALTY = 15
 # "AI upscale" releases are SD/HD blown up to 2160p+: fake 4K, dropped.
 UPSCALE_WORDS = frozenset({"upscale", "upscaled", "upscaling"})
 # Dynamic range, for TVs that can show it (the target TV does Dolby Vision):
@@ -312,14 +322,42 @@ _NAME_PREFIX_RE = re.compile(
 )
 
 
+def _strip_site_prefix(name: str) -> str:
+    while (stripped := _NAME_PREFIX_RE.sub("", name, count=1)) != name:
+        name = stripped
+    return name
+
+
 def title_matches(name: str, query: str) -> bool:
     """True if `name` starts with `query`'s words (whole words, ignoring case
     and punctuation, after any leading site tag). Release names lead with the
     title; matching anywhere let "Runner 2026" pick "The Runner 2026" and
     "Toy Story 5" match "Toy Story 4 ... 5.1"."""
-    while (stripped := _NAME_PREFIX_RE.sub("", name, count=1)) != name:
-        name = stripped
-    return _words(name).startswith(_words(query))
+    return _words(_strip_site_prefix(name)).startswith(_words(query))
+
+
+# What may sit between a show's title and its season/episode code.
+_TV_TITLE_SUFFIX_RE = re.compile(r"(?:19|20)\d\d|us|uk|au|nz|ca")
+_TV_CODE_RE = re.compile(r"s\d{1,2}(?:e\d{1,3})?")
+
+
+def tv_title_matches(name: str, show: str) -> bool:
+    """title_matches(), plus the title must be followed directly by the
+    season/episode code — optionally after a year or country tag
+    ("Lanterns.2026.S01E07", "Ghosts.US.S05E01", "Show Season 1"). Stops a
+    short title matching a longer one: "War" vs "War of the Worlds S01E01"."""
+    words = _words(_strip_site_prefix(name)).split()
+    title = _words(show).split()
+    if words[:len(title)] != title:
+        return False
+    rest = words[len(title):]
+    for _ in range(2):
+        if rest and _TV_TITLE_SUFFIX_RE.fullmatch(rest[0]):
+            rest = rest[1:]
+    if not rest:
+        return False
+    return bool(_TV_CODE_RE.fullmatch(rest[0])) or (
+        rest[0] == "season" and len(rest) > 1 and rest[1].isdigit())
 
 
 def search_torrents(query: str, sort: int = 3, category: int = 200) -> list[dict]:
@@ -488,6 +526,16 @@ def _first_match(name: str, patterns: list[tuple[re.Pattern, int]]) -> int:
     return 0
 
 
+def _language_penalty(words: set[str]) -> int:
+    if words & DUBBED_OR_BURNED_IN_WORDS:
+        return FOREIGN_PENALTY
+    if words & MULTI_LANGUAGE_WORDS or (words & FOREIGN_LANGUAGE_WORDS and words & ENGLISH_WORDS):
+        return MULTI_LANGUAGE_PENALTY
+    if words & FOREIGN_LANGUAGE_WORDS:
+        return FOREIGN_PENALTY
+    return 0
+
+
 def _source_score(name: str) -> int:
     for pattern, tok in _SOURCE_PATTERNS:
         if pattern.search(name):
@@ -536,8 +584,7 @@ def score_torrent(
     # Blu-ray audio vs a re-encoded AAC track), so audio counts there.
     if not is_tv:
         score += _first_match(name, _AUDIO_PATTERNS)
-    if words & FOREIGN_WORDS:
-        score -= FOREIGN_PENALTY
+    score -= _language_penalty(words)
     if words & _DV_WORDS or " dolby vision " in _words(torrent["name"]):
         score += DOLBY_VISION_SCORE
     elif words & _HDR_WORDS:
@@ -1040,7 +1087,8 @@ def _search_and_display(
         aired = expected.get(episode_key(t["name"]))
         return aired.runtime if aired else None
 
-    matched = [t for t in found if title_matches(t["name"], show)]
+    matches = title_matches if is_movie else tv_title_matches
+    matched = [t for t in found if matches(t["name"], show)]
     scored = [(s, t) for t in matched
               if (s := score_torrent(t, cutoff, is_tv=not is_movie, runtime_min=runtime(t))) is not None]
     scored.sort(key=rank_key, reverse=True)

@@ -63,7 +63,8 @@ Each torrent gets a score before being offered:
 | Source: WEB-DL / WEB / BluRay | +30 |
 | Source: WEBRip, or WEB-DL re-encoded (x264/x265 tag) | +10 |
 | Source: HDTV / DCPRip | +5 |
-| Foreign or multi-language (ITA, MULTi, Dual, Hindi, …) | −40 |
+| Dubbed, burned-in subtitles, or foreign without English (Dubbed, HC, VOSTFR, FRENCH, iTA, …) | −40 |
+| Extra language tracks beside English (MULTi, Dual, ENG.ITA, NORDiC) | −15 |
 | Dolby Vision | +20 |
 | HDR / HDR10 / HDR10+ (without DV) | +10 |
 | Bitrate below the floor for its resolution (TV: TVMaze runtime; movies: assume 100 min) | −40 |
