@@ -137,3 +137,7 @@ So a skipped/missing episode is offered again next run instead of being hidden f
 ### Peer sync
 
 The file is shared with linuxvm. `sync_content_list_with_peer()` does two `rsync -au` passes (newer mtime wins) at the start of list mode, and `record_progress()` syncs + re-reads before merging its updates (max per show) and syncs again after saving, so concurrent tvcal edits aren't clobbered. Peer host is hardcoded in `_peer_host()`.
+
+Auth (failures are silent apart from `--debug`):
+- **Mac → linuxvm:** no key file; ssh uses the 1Password agent via `~/.ssh/config`, so a sync can raise a 1Password approval prompt (`_SYNC_TIMEOUT` = 45 s allows for it).
+- **linuxvm → Mac:** dedicated passphrase-less key `~/.ssh/id_content_sync` on linuxvm. The Mac's `~/.ssh/authorized_keys` entry is `command="/Users/ben/bin/content-list-rsync",from="192.168.1.2",restrict`; that wrapper (not in this repo) only execs `/usr/bin/rsync --server [--sender] -<flags> . .content_list.json`. If rsync's server argv changes (e.g. new flags with spaces), the wrapper's regex will need updating.

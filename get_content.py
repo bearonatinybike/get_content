@@ -524,7 +524,14 @@ def save_content_list(data: dict) -> None:
 # in list-driven mode - before reading and around writing - via two
 # one-directional `rsync -u` passes, so whichever side has the newer mtime
 # wins in both directions without needing a daemon anywhere.
-_SSH_KEY = Path("~/.ssh/id_ben_ed25519").expanduser()
+#
+# Auth differs per side. The Mac has no key file: ssh uses the 1Password agent
+# from ~/.ssh/config, so a sync may raise a 1Password approval prompt. linuxvm
+# uses this dedicated key, which the Mac's authorized_keys pins to a forced
+# command (~/bin/content-list-rsync) that only allows rsync of this one file.
+_SSH_KEY = Path("~/.ssh/id_content_sync").expanduser()
+# Long enough to approve a 1Password prompt; ConnectTimeout bounds a dead peer.
+_SYNC_TIMEOUT = 45
 
 
 def _peer_host() -> str:
@@ -539,19 +546,23 @@ def _peer_host() -> str:
 
 def sync_content_list_with_peer() -> None:
     """Best-effort two-way sync; an unreachable peer just leaves this run
-    working from whatever is already on disk, same as before this existed."""
-    if not _SSH_KEY.exists():
-        return
+    working from whatever is already on disk."""
     remote = f"{_peer_host()}:.content_list.json"
     local = str(CONTENT_LIST)
-    ssh_cmd = f"ssh -i {_SSH_KEY} -o ConnectTimeout=5 -o BatchMode=yes"
+    ssh_cmd = "ssh -o ConnectTimeout=5 -o BatchMode=yes"
+    if _SSH_KEY.exists():
+        ssh_cmd += f" -i {_SSH_KEY} -o IdentitiesOnly=yes"
     for src, dst in ((local, remote), (remote, local)):
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["rsync", "-au", "-e", ssh_cmd, src, dst],
-                capture_output=True, timeout=15, check=False,
+                capture_output=True, text=True, timeout=_SYNC_TIMEOUT, check=False,
             )
-        except (subprocess.TimeoutExpired, OSError):
+        except (subprocess.TimeoutExpired, OSError) as e:
+            log.debug("content list sync skipped: %s", e)
+            return
+        if result.returncode != 0:
+            log.debug("content list sync failed (%s → %s): %s", src, dst, result.stderr.strip())
             return
 
 
