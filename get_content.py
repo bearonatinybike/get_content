@@ -5,6 +5,7 @@ Search piratebay.party for torrents.
   get_content.py                  # work through ~/.content_list.json (TV, last 6 days)
   get_content.py "Dune" --movie   # search all-time, no episode grouping
   get_content.py "Severance" --tv # search last 6 days, group by episode
+  get_content.py "Scrubs 2026 S02E01"  # one episode, any date (year picks the series)
 """
 
 import argparse
@@ -44,9 +45,21 @@ HTTP_RETRIES = 1
 
 # Score weights. Tokens are matched against the lower-cased name with dots and
 # underscores turned into spaces, so "DTS-HD.MA" matches "dts-hd ma".
+#
+# HEVC only gets a small edge: it's more efficient, but most 1080p HEVC
+# releases are re-encodes of an H.264 WEB-DL, so they can't be better than it.
+# Over-squeezed ones are caught by MIN_MBPS instead.
 CODEC_SCORES = {
-    "hevc": 80, "h265": 80, "h 265": 80, "x265": 80,
+    "hevc": 70, "h265": 70, "h 265": 70, "x265": 70,
     "h264": 60, "h 264": 60, "x264": 60, "avc": 40,
+}
+# Where the video came from: an untouched WEB-DL ("WEB" in scene naming) or a
+# Blu-ray encode beats a WEBRip (re-captured/re-encoded) beats a TV capture.
+# Matched as whole words; "webrip" must precede "web".
+SOURCE_SCORES = {
+    "web-dl": 30, "webdl": 30, "webrip": 15, "web": 30,
+    "bluray": 30, "blu-ray": 30, "brrip": 10, "bdrip": 10,
+    "hdtv": 5,
 }
 RESOLUTION_SCORES = {
     "2160p": 80, "4k": 75, "uhd": 70,
@@ -68,18 +81,40 @@ AUDIO_SCORES = {
 TRUSTED_TV_UPLOADERS    = frozenset({"TvTeam", "EZTV"})
 TRUSTED_MOVIE_UPLOADERS = frozenset({"YTS", "YTS.MX", "YTS.LT", "YTS.AG", "mkvCinemas", "Pahe.in", "FitGirl"})
 
+# Minimum average bitrate (Mbit/s, whole file) per resolution as (HEVC, H.264).
+# Below it, a release has been squeezed further than the codec's efficiency
+# covers and has visibly lost detail. Only checked when TVMaze supplies a
+# runtime; those are slot lengths (30 for a ~22-minute sitcom), so the floors
+# sit a little under the real thresholds.
+MIN_MBPS = {
+    "2160p": (6.0, 12.0),
+    "1080p": (1.8, 3.0),
+    "720p":  (0.9, 1.5),
+}
+OVERCOMPRESSED_PENALTY = 40
+
 _GB = 1024 ** 3
 
 
-def _token_patterns(scores: dict[str, int]) -> list[tuple[re.Pattern, int]]:
-    # Anchor only the start of each token: "ac3" must not match inside "eac3",
-    # nor "4k" inside "24k", but trailing digits are normal ("DDP5.1", "AAC2.0").
-    return [(re.compile(r"(?<![a-z0-9])" + re.escape(tok)), pts) for tok, pts in scores.items()]
+def _token_patterns(
+    scores: dict[str, int], *, whole_word: bool = False
+) -> list[tuple[re.Pattern, int]]:
+    # Anchor the start of each token: "ac3" must not match inside "eac3", nor
+    # "4k" inside "24k". Codec/audio tokens may be followed by digits
+    # ("DDP5.1", "AAC2.0"); whole_word tokens may not ("web" vs "webcam").
+    end = r"(?![a-z0-9])" if whole_word else ""
+    return [(re.compile(r"(?<![a-z0-9])" + re.escape(tok) + end), pts)
+            for tok, pts in scores.items()]
 
 
 _CODEC_PATTERNS      = _token_patterns(CODEC_SCORES)
 _RESOLUTION_PATTERNS = _token_patterns(RESOLUTION_SCORES)
 _AUDIO_PATTERNS      = _token_patterns(AUDIO_SCORES)
+_SOURCE_PATTERNS     = _token_patterns(SOURCE_SCORES, whole_word=True)
+_HEVC_RE             = re.compile(r"(?<![a-z0-9])(?:hevc|h ?265|x265)")
+_RES_CLASS_RE        = [(re.compile(r"(?<![a-z0-9])(?:2160p|4k|uhd)"), "2160p"),
+                        (re.compile(r"(?<![a-z0-9])1080p"), "1080p"),
+                        (re.compile(r"(?<![a-z0-9])720p"), "720p")]
 
 # ---------------------------------------------------------------------------
 # HTML scraping
@@ -260,6 +295,15 @@ def _ep_sort_key(key: str) -> tuple[int, int, int]:
     return (0, *t) if t else (1, 0, 0)
 
 
+def split_episode_query(query: str) -> tuple[str, str | None]:
+    """"Scrubs 2026 S02E01" → ("Scrubs 2026", "S02E01"); no code → (query, None)."""
+    m = EPISODE_RE.search(query)
+    if not m:
+        return query, None
+    show = re.sub(r"\s+", " ", query[:m.start()] + " " + query[m.end():]).strip()
+    return show, episode_key(m.group(0))
+
+
 # ---------------------------------------------------------------------------
 # TVMaze — verify which episodes actually aired this week
 # ---------------------------------------------------------------------------
@@ -275,24 +319,61 @@ def _tvmaze_get(url: str):
         return None
 
 
+@dataclass
+class Aired:
+    label: str              # "S01E03 · Title (YYYY-MM-DD)"
+    runtime: int | None     # minutes (TVMaze's scheduled slot length)
+
+
+_YEAR_SUFFIX_RE = re.compile(r"^(.*\S)\s+\(?((?:19|20)\d\d)\)?$")
+
+
+def tvmaze_find_show(name: str) -> int | None:
+    """TVMaze id for a show name, or None.
+
+    A trailing year ("Scrubs 2026") picks the same-named series that premiered
+    that year — TVMaze's search finds nothing with the year left in. Otherwise
+    TVMaze's top hit, which can silently be the wrong show for ambiguous names.
+    """
+    m = _YEAR_SUFFIX_RE.match(name.strip())
+    query, year = (m.group(1), m.group(2)) if m else (name, None)
+    results = _tvmaze_get(f"https://api.tvmaze.com/search/shows?q={quote_plus(query)}")
+    if not results:
+        return None
+    if year:
+        for r in results:
+            if (r["show"].get("premiered") or "").startswith(year):
+                return r["show"]["id"]
+    return results[0]["show"]["id"]
+
+
+def _tvmaze_episodes(show_name: str, show_id: int | None) -> list[dict] | None:
+    if show_id is None:
+        show_id = tvmaze_find_show(show_name)
+        if show_id is None:
+            return None
+    return _tvmaze_get(f"https://api.tvmaze.com/shows/{show_id}/episodes")
+
+
+def _aired(ep: dict) -> tuple[str, Aired] | None:
+    # Specials have no episode number and can't be matched to S##E## names
+    if ep.get("season") is None or ep.get("number") is None:
+        return None
+    key = f"S{ep['season']:02d}E{ep['number']:02d}"
+    label = f"{key} · {ep.get('name') or '?'} ({ep.get('airdate') or 'no date'})"
+    return key, Aired(label, ep.get("runtime"))
+
+
 def tvmaze_aired_this_week(
     show_name: str, days_back: int, show_id: int | None = None
-) -> dict[str, str] | None:
+) -> dict[str, Aired] | None:
     """
-    Return {episode_key: "S01E03 · Title (YYYY-MM-DD)"} for episodes that aired
-    in the last `days_back` days. An empty dict means the show was found but
-    nothing aired; None means the lookup failed or the show isn't on TVMaze.
-
-    Pass show_id to skip the name search. Ambiguous titles resolve to whatever
-    ranks first otherwise, which can silently point at the wrong show.
+    Return {episode_key: Aired} for episodes that aired in the last `days_back`
+    days. An empty dict means the show was found but nothing aired; None means
+    the lookup failed or the show isn't on TVMaze. Pass show_id to skip the
+    name search.
     """
-    if show_id is None:
-        results = _tvmaze_get(f"https://api.tvmaze.com/search/shows?q={quote_plus(show_name)}")
-        if not results:
-            return None
-        show_id = results[0]["show"]["id"]
-
-    episodes = _tvmaze_get(f"https://api.tvmaze.com/shows/{show_id}/episodes")
+    episodes = _tvmaze_episodes(show_name, show_id)
     if episodes is None:
         return None
 
@@ -300,20 +381,22 @@ def tvmaze_aired_this_week(
     cutoff = today - timedelta(days=days_back)
     aired = {}
     for ep in episodes:
-        # Specials have no episode number and can't be matched to S##E## names
-        if ep.get("season") is None or ep.get("number") is None:
-            continue
-        airdate_str = ep.get("airdate") or ""
-        if not airdate_str:
-            continue
         try:
-            airdate = datetime.strptime(airdate_str, "%Y-%m-%d").date()
+            airdate = datetime.strptime(ep.get("airdate") or "", "%Y-%m-%d").date()
         except ValueError:
             continue
-        if cutoff <= airdate <= today:
-            key = f"S{ep['season']:02d}E{ep['number']:02d}"
-            aired[key] = f"{key} · {ep.get('name', '?')} ({airdate_str})"
+        if cutoff <= airdate <= today and (entry := _aired(ep)):
+            aired[entry[0]] = entry[1]
     return aired
+
+
+def tvmaze_episode(show_name: str, key: str, show_id: int | None = None) -> Aired | None:
+    """Look up one episode by key, regardless of when it aired."""
+    for ep in _tvmaze_episodes(show_name, show_id) or []:
+        entry = _aired(ep)
+        if entry and entry[0] == key:
+            return entry[1]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +410,17 @@ def _first_match(name: str, patterns: list[tuple[re.Pattern, int]]) -> int:
     return 0
 
 
-def score_torrent(torrent: dict, cutoff_ts: int, *, is_tv: bool = True) -> int | None:
+def _bitrate_floor(name: str) -> float | None:
+    for pattern, res in _RES_CLASS_RE:
+        if pattern.search(name):
+            hevc, h264 = MIN_MBPS[res]
+            return hevc if _HEVC_RE.search(name) else h264
+    return None
+
+
+def score_torrent(
+    torrent: dict, cutoff_ts: int, *, is_tv: bool = True, runtime_min: int | None = None
+) -> int | None:
     if torrent["added"] < cutoff_ts:
         return None
 
@@ -338,7 +431,15 @@ def score_torrent(torrent: dict, cutoff_ts: int, *, is_tv: bool = True) -> int |
 
     score = (_first_match(name, _CODEC_PATTERNS)
              + _first_match(name, _RESOLUTION_PATTERNS)
-             + _first_match(name, _AUDIO_PATTERNS))
+             + _first_match(name, _AUDIO_PATTERNS)
+             + _first_match(name, _SOURCE_PATTERNS))
+
+    size = torrent.get("size", 0)
+    floor = _bitrate_floor(name)
+    if runtime_min and size and floor:
+        mbps = size * 8 / (runtime_min * 60) / 1e6
+        if mbps < floor:
+            score -= OVERCOMPRESSED_PENALTY
 
     if seeders == 0 and not is_tv:
         # Dead in an all-time catalogue. TV keeps these: a fresh upload can show
@@ -352,7 +453,6 @@ def score_torrent(torrent: dict, cutoff_ts: int, *, is_tv: bool = True) -> int |
         score += 30
 
     if not is_tv:
-        size = torrent.get("size", 0)
         if size > 10 * _GB:
             return None
         if size >= 2 * _GB:
@@ -360,6 +460,11 @@ def score_torrent(torrent: dict, cutoff_ts: int, *, is_tv: bool = True) -> int |
             score += int(min(size - 2 * _GB, 4 * _GB) / (4 * _GB) * 40)
 
     return score
+
+
+def rank_key(scored: tuple[int, dict]) -> tuple[int, int]:
+    """Sort key for (score, torrent): score, then seeders to break ties."""
+    return scored[0], scored[1].get("seeders", 0)
 
 
 def best_candidates(ep_results: list[tuple[int, dict]]) -> tuple[list[tuple[int, dict]], bool]:
@@ -377,7 +482,7 @@ def group_by_episode(
     groups: dict[str, list] = defaultdict(list)
     for score, t in scored:
         groups[episode_key(t["name"])].append((score, t))
-    grouped = {k: sorted(v, key=lambda x: x[0], reverse=True) for k, v in groups.items()}
+    grouped = {k: sorted(v, key=rank_key, reverse=True) for k, v in groups.items()}
     if drop_stale:
         grouped = _drop_stale_episodes(grouped)
     return dict(sorted(grouped.items(), key=lambda kv: _ep_sort_key(kv[0])))
@@ -612,9 +717,10 @@ def prompt_yes_no(question: str) -> bool:
 def _display_tv(
     show: str,
     scored: list[tuple[int, dict]],
-    expected: dict[str, str] | None,
+    expected: dict[str, Aired] | None,
     *,
     last_ep: str | None = None,
+    src: str = "TVMaze-verified",
 ) -> list[Pick]:
     # With TVMaze, its episode list replaces the stale-episode heuristic; that
     # heuristic would wrongly drop early episodes of a whole-season release.
@@ -642,7 +748,7 @@ def _display_tv(
         if missing:
             first_gap = ep_tuple(missing[0])
             for k in missing:
-                print(f"  ⚠ Not on TPB yet: {expected[k]}")
+                print(f"  ⚠ Not on TPB yet: {expected[k].label}")
             print()
 
     if not episodes:
@@ -651,7 +757,8 @@ def _display_tv(
 
     ep_count = len(episodes)
     label = "episode" if ep_count == 1 else "episodes"
-    src = "TVMaze-verified" if expected is not None else "date-filtered"
+    if expected is None:
+        src = "date-filtered"
     print(f"  Found {len(scored)} result(s) → {ep_count} {label} ({src}).\n")
 
     selected = []
@@ -659,7 +766,7 @@ def _display_tv(
     for ep_key, ep_results in episodes.items():
         candidates, is_hd = best_candidates(ep_results)
         best_score, best = candidates[0]
-        ep_label = expected.get(ep_key, ep_key) if expected else ep_key
+        ep_label = expected[ep_key].label if expected and ep_key in expected else ep_key
         title = ep_label.split("·", 1)[1].strip() if "·" in ep_label else ""
         tag = f"[{ep_key}]"
         hd_note = "" if is_hd else "  ⚠ no HD found"
@@ -708,14 +815,25 @@ def _display_movie(scored: list[tuple[int, dict]]) -> list[Pick]:
 
 def _search_and_display(
     show: str, is_movie: bool, cutoff: int, *,
-    last_ep: str | None = None, show_id: int | None = None
+    last_ep: str | None = None, show_id: int | None = None, episode: str | None = None
 ) -> list[Pick]:
+    """Search, score and prompt for one title. `episode` ("S02E01") asks for
+    that single episode of `show`, whenever it aired."""
     print(f"{'='*60}")
-    print(f"  {show}")
+    print(f"  {show}{' ' + episode if episode else ''}")
     print(f"{'='*60}")
 
     expected = None
-    if not is_movie:
+    src = "TVMaze-verified"
+    if episode:
+        aired = tvmaze_episode(show, episode, show_id)
+        if aired:
+            print(f"  TVMaze: {aired.label}\n")
+        else:
+            print("  TVMaze: episode not found — searching anyway\n")
+            src = "requested episode"
+        expected = {episode: aired or Aired(episode, None)}
+    elif not is_movie:
         expected = tvmaze_aired_this_week(show, DAYS_BACK, show_id)
         if expected is None:
             print("  TVMaze: lookup failed or show not found — using date filter only\n")
@@ -724,7 +842,7 @@ def _search_and_display(
             return []
         else:
             ordered = sorted(expected, key=_ep_sort_key)
-            print(f"  TVMaze: {', '.join(expected[k] for k in ordered)}")
+            print(f"  TVMaze: {', '.join(expected[k].label for k in ordered)}")
             last = ep_tuple(last_ep)
             expected = {k: expected[k] for k in ordered if not last or ep_tuple(k) > last}
             if not expected:
@@ -744,11 +862,15 @@ def _search_and_display(
     else:
         found = search_torrents(show, sort=99 if is_movie else 3)
 
+    def runtime(t: dict) -> int | None:
+        aired = expected.get(episode_key(t["name"])) if expected else None
+        return aired.runtime if aired else None
+
     tokens = clean_query(show).lower().split()
     matched = [t for t in found if all(tok in t["name"].lower() for tok in tokens)]
     scored = [(s, t) for t in matched
-              if (s := score_torrent(t, cutoff, is_tv=not is_movie)) is not None]
-    scored.sort(key=lambda x: x[0], reverse=True)
+              if (s := score_torrent(t, cutoff, is_tv=not is_movie, runtime_min=runtime(t))) is not None]
+    scored.sort(key=rank_key, reverse=True)
 
     # With a TVMaze list, fall through even when empty so missing episodes are reported.
     if not scored and not expected:
@@ -763,7 +885,7 @@ def _search_and_display(
 
     if is_movie:
         return _display_movie(scored)
-    return _display_tv(show, scored, expected, last_ep=last_ep)
+    return _display_tv(show, scored, expected, last_ep=last_ep, src=src)
 
 
 def main() -> None:
@@ -787,10 +909,15 @@ def main() -> None:
 
     if not list_mode:
         is_movie = args.movie
-        cutoff   = movie_cutoff if is_movie else tv_cutoff
-        mode_label = "movie, all-time" if is_movie else f"TV, last {DAYS_BACK} days"
+        show, episode = (args.query, None) if is_movie else split_episode_query(args.query)
+        if episode:
+            cutoff, mode_label = 0, "TV, single episode, any date"
+        elif is_movie:
+            cutoff, mode_label = movie_cutoff, "movie, all-time"
+        else:
+            cutoff, mode_label = tv_cutoff, f"TV, last {DAYS_BACK} days"
         print(f"Searching piratebay.party — {mode_label}\n")
-        picks = _search_and_display(args.query, is_movie=is_movie, cutoff=cutoff)
+        picks = _search_and_display(show, is_movie=is_movie, cutoff=cutoff, episode=episode)
     else:
         if args.tv or args.movie:
             ap.error("--tv / --movie only apply when a query argument is given")

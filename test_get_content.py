@@ -100,13 +100,14 @@ class EpisodeKeyTests(unittest.TestCase):
 class ScoringTests(unittest.TestCase):
     def score(self, name, **kw):
         is_tv = kw.pop("is_tv", True)
-        return gc.score_torrent(torrent(name, **kw), 0, is_tv=is_tv)
+        runtime_min = kw.pop("runtime_min", None)
+        return gc.score_torrent(torrent(name, **kw), 0, is_tv=is_tv, runtime_min=runtime_min)
 
     def test_tokens_respect_word_starts(self):
         self.assertEqual(self.score("Show.EAC3"), 15)      # not also "ac3"
         self.assertEqual(self.score("Show.DDP5.1"), 15)    # trailing digits fine
         self.assertEqual(self.score("Show.DTS-HD.MA.5.1"), 25)
-        self.assertEqual(self.score("Show.H.265"), 80)
+        self.assertEqual(self.score("Show.H.265"), 70)
         self.assertEqual(self.score("Havc.24k"), 0)
 
     def test_movie_size_bonus_plateaus(self):
@@ -131,6 +132,29 @@ class ScoringTests(unittest.TestCase):
     def test_movie_mode_rejects_episodes(self):
         self.assertIsNone(self.score("Show.S01E01.1080p", is_tv=False))
 
+    def test_source(self):
+        self.assertEqual(self.score("Show 1080p WEB h264-ETHEL") - self.score("Show 1080p h264"), 30)
+        self.assertEqual(self.score("Show.1080p.WEB-DL.H264"), self.score("Show.1080p.WEB.H264"))
+        self.assertEqual(self.score("Show.WEBRip"), 15)
+        self.assertEqual(self.score("Show.HDTV"), 5)
+        self.assertEqual(self.score("Webcam.Show"), 0)
+
+    def test_overcompressed_penalty(self):
+        mb = 1024 ** 2
+        at = lambda name, size_mb: self.score(name, size=int(size_mb * mb), runtime_min=30)
+        # 266 MB of 1080p HEVC over a 30-min slot ≈ 1.2 Mbit/s: squeezed
+        self.assertEqual(at("Show 1080p HEVC x265", 266), 70 + 60 - gc.OVERCOMPRESSED_PENALTY)
+        self.assertEqual(at("Show 1080p x265", 533), 70 + 60)
+        # H.264 needs more bits than HEVC for the same quality
+        self.assertEqual(at("Show 1080p h264", 533), 60 + 60 - gc.OVERCOMPRESSED_PENALTY)
+        self.assertEqual(at("Show 1080p h264", 995), 60 + 60)
+        # No runtime (movies, date-filter fallback) → no check
+        self.assertEqual(self.score("Show 1080p HEVC", size=266 * mb), 130)
+
+    def test_ties_broken_by_seeders(self):
+        few, many = (1, torrent("a", seeders=160)), (1, torrent("b", seeders=1037))
+        self.assertEqual(sorted([few, many], key=gc.rank_key, reverse=True)[0], many)
+
 
 class TVMazeTests(unittest.TestCase):
     def run_with(self, episodes):
@@ -143,6 +167,22 @@ class TVMazeTests(unittest.TestCase):
     def test_failure_is_none(self):
         self.assertIsNone(self.run_with(None))
 
+    def test_episode_lookup_ignores_date(self):
+        eps = [{"season": 2, "number": 1, "airdate": "2002-10-03", "name": "Old", "runtime": 30}]
+        with mock.patch.object(gc, "_tvmaze_get", return_value=eps):
+            aired = gc.tvmaze_episode("Show", "S02E01", show_id=1)
+        self.assertEqual((aired.label, aired.runtime), ("S02E01 · Old (2002-10-03)", 30))
+
+    def test_year_picks_series(self):
+        hits = [{"show": {"id": 532, "premiered": "2001-10-02"}},
+                {"show": {"id": 84836, "premiered": "2026-02-25"}}]
+        with mock.patch.object(gc, "_tvmaze_get", return_value=hits) as get:
+            self.assertEqual(gc.tvmaze_find_show("Scrubs 2026"), 84836)
+            self.assertIn("q=Scrubs", get.call_args[0][0])
+            self.assertNotIn("2026", get.call_args[0][0])
+            self.assertEqual(gc.tvmaze_find_show("Scrubs (2001)"), 532)
+            self.assertEqual(gc.tvmaze_find_show("Scrubs"), 532)  # top hit
+
     def test_specials_are_skipped(self):
         today = datetime.now().strftime("%Y-%m-%d")
         aired = self.run_with([
@@ -152,6 +192,13 @@ class TVMazeTests(unittest.TestCase):
         self.assertEqual(list(aired), ["S01E02"])
 
 
+class EpisodeQueryTests(unittest.TestCase):
+    def test_split(self):
+        self.assertEqual(gc.split_episode_query("Scrubs 2026 S02E01"), ("Scrubs 2026", "S02E01"))
+        self.assertEqual(gc.split_episode_query("Scrubs s2e1"), ("Scrubs", "S02E01"))
+        self.assertEqual(gc.split_episode_query("Severance"), ("Severance", None))
+
+
 class DisplayTvTests(unittest.TestCase):
     def picks(self, scored, expected, answers, last_ep=None):
         with mock.patch.object(gc, "prompt_yes_no", side_effect=answers), \
@@ -159,7 +206,7 @@ class DisplayTvTests(unittest.TestCase):
             return gc._display_tv("Show", scored, expected, last_ep=last_ep)
 
     def test_whole_season_release_keeps_early_episodes(self):
-        expected = {f"S01E{n:02d}": f"S01E{n:02d} · T" for n in range(1, 11)}
+        expected = {f"S01E{n:02d}": gc.Aired(f"S01E{n:02d} · T", 30) for n in range(1, 11)}
         scored = [(1, torrent(f"Show.S01E{n:02d}.1080p")) for n in range(1, 11)]
         picks = self.picks(scored, expected, [True] * 10)
         self.assertEqual(len(picks), 10)
@@ -171,7 +218,7 @@ class DisplayTvTests(unittest.TestCase):
         self.assertEqual([(p.ep_key, p.advances) for p in picks], [("S01E06", False)])
 
     def test_missing_earlier_episode_blocks_history(self):
-        expected = {"S01E05": "S01E05 · A", "S01E06": "S01E06 · B"}
+        expected = {"S01E05": gc.Aired("S01E05 · A", 30), "S01E06": gc.Aired("S01E06 · B", 30)}
         picks = self.picks([(1, torrent("Show.S01E06.1080p"))], expected, [True])
         self.assertEqual([(p.ep_key, p.advances) for p in picks], [("S01E06", False)])
 

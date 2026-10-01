@@ -62,12 +62,16 @@ Key gotchas:
 
 Free API, no key required. Up to two calls per show:
 
-1. `GET https://api.tvmaze.com/search/shows?q={name}` → take `results[0]["show"]["id"]` (skipped when the content list has a `tvmaze_id`)
-2. `GET https://api.tvmaze.com/shows/{id}/episodes` → filter by `today - DAYS_BACK <= airdate <= today`; specials (`number: null`) are skipped
+1. `GET https://api.tvmaze.com/search/shows?q={name}` via `tvmaze_find_show()` (skipped when the content list has a `tvmaze_id`). A trailing year (`Scrubs 2026`, `Scrubs (2001)`) is stripped from the query — TVMaze returns nothing with it left in — and used to pick the result that premiered that year; otherwise `results[0]`.
+2. `GET https://api.tvmaze.com/shows/{id}/episodes` → filter by `today - DAYS_BACK <= airdate <= today`; specials (`number: null`) are skipped. `tvmaze_episode()` instead picks one key regardless of date.
 
-Returns `{episode_key: "S01E03 · Title (YYYY-MM-DD)"}`, `{}` if the show was found but nothing aired (the show is skipped without searching TPB), or `None` if the lookup failed / show not found (falls back to date filtering + `_drop_stale_episodes()`). Keep those two cases distinct — conflating them made the fallback offer re-uploads of old episodes for shows on a break.
+Returns `{episode_key: Aired(label="S01E03 · Title (YYYY-MM-DD)", runtime=minutes)}`, `{}` if the show was found but nothing aired (the show is skipped without searching TPB), or `None` if the lookup failed / show not found (falls back to date filtering + `_drop_stale_episodes()`). Keep those two cases distinct — conflating them made the fallback offer re-uploads of old episodes for shows on a break.
 
 The upper bound (`airdate <= today`) is essential — without it, future episodes appear as "Not on TPB yet" when they simply haven't aired. Expected keys ≤ `last_downloaded` are removed before searching, so already-grabbed episodes aren't reported missing.
+
+## Single-episode queries
+
+`get_content.py "Scrubs 2026 S02E01"` (TV mode, the default): `split_episode_query()` pulls the `S##E##` out of the query; the rest is the show name. That episode is looked up with `tvmaze_episode()` (any air date), searched as `"{show} {key}"` with no date window, and treated as the expected list (so its runtime feeds the bitrate check). Without the year, same-named series (Scrubs 2001 vs 2026) resolve to TVMaze's top hit and their releases can mix under one key.
 
 ## Episode keys
 
@@ -80,7 +84,8 @@ Date-filter fallback only (`group_by_episode(drop_stale=expected is None)`). Wit
 ## Scoring
 
 ```python
-CODEC_SCORES      = {hevc/h265/x265: 80, h264/x264: 60, avc: 40}
+CODEC_SCORES      = {hevc/h265/x265: 70, h264/x264: 60, avc: 40}
+SOURCE_SCORES     = {web-dl/web/bluray: 30, webrip: 15, brrip/bdrip: 10, hdtv: 5}   # whole words
 RESOLUTION_SCORES = {2160p: 80, 4k: 75, uhd: 70, 1080p: 60, 720p: 20}
 AUDIO_SCORES      = {atmos/truehd: 30, dts-hd ma/dts:x: 25, dts-hd: 20,
                      eac3/ddp/dd+: 15, dts: 10, aac/ac3: 5}
@@ -89,10 +94,16 @@ zero_seeders      = movies dropped; TV kept (fresh uploads can show 0 before cou
 trusted_uploader  = +30 (TV: TvTeam/EZTV; movies: YTS variants/mkvCinemas/Pahe.in/FitGirl)
 movie_size_bonus  = linear 0→+40 across 2–6 GB, flat +40 from 6–10 GB
 movie_size_cap    = files > 10 GB excluded (remuxes)
+overcompressed    = −40 when size / TVMaze runtime is under MIN_MBPS for the resolution
+                    (1080p: HEVC 1.8 / H.264 3.0 Mbit/s; 720p 0.9/1.5; 2160p 6/12)
+ties              = broken by seeder count (rank_key)
 ```
 
 Key design decisions:
-- Tokens match only at a word start (`(?<![a-z0-9])`) — `ac3` doesn't fire inside `eac3`, `4k` not inside `24k` — but may be followed by anything (`DDP5.1`, `AAC2.0`).
+- Tokens match only at a word start (`(?<![a-z0-9])`) — `ac3` doesn't fire inside `eac3`, `4k` not inside `24k` — but codec/audio tokens may be followed by anything (`DDP5.1`, `AAC2.0`). Source tokens are whole words, so `web` doesn't match `webcam`.
+- HEVC gets only +10 over H.264. At 1080p most HEVC releases are re-encodes of an H.264 WEB-DL (`x265` in the name = encoded by the group; `H.265`/`HEVC` alone can be the untouched stream, common at 2160p), so they can't beat their source. Efficiency is rewarded only as a tiebreak; over-squeezed encodes (e.g. MeGusta's ~1.2 Mbit/s 1080p) are caught by the bitrate floor.
+- Source outranks codec: an untouched WEB-DL beats a re-encode of it.
+- The bitrate floor needs a runtime, so it only applies when TVMaze matched the episode. TVMaze runtimes are slot lengths (30 for a ~22-min sitcom), which is why the floors sit below the real thresholds.
 - Seeder bonus is log-scaled up to 50, so a well-seeded release can beat a slightly better-scored one that will barely download, while thousands of seeders can't outweigh codec + resolution.
 - Tokens within a table are matched first-hit in dict order, so most-specific first ("dts-hd ma" before "dts-hd" before "dts").
 - Trusted uploaders are split by context: TV uploaders don't get the bonus in movie searches and vice versa.

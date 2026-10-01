@@ -35,6 +35,9 @@ get_content.py
 # Search for a specific TV show (last 6 days, grouped by episode)
 get_content.py "Severance" --tv
 
+# One specific episode, any air date (a year picks between same-named series)
+get_content.py "Scrubs 2026 S02E01"
+
 # Search for a movie (all-time, top 5 results by score)
 get_content.py "Dune Part Two" --movie
 
@@ -51,9 +54,13 @@ Each torrent gets a score before being offered:
 
 | Signal | Points |
 |---|---|
-| h265 / HEVC / x265 | +80 |
+| h265 / HEVC / x265 | +70 |
 | h264 / x264 | +60 |
 | AVC | +40 |
+| Source: WEB-DL / WEB / BluRay | +30 |
+| Source: WEBRip | +15 |
+| Source: HDTV | +5 |
+| Bitrate below the floor for its resolution (TV, needs TVMaze runtime) | −40 |
 | 2160p / 4K / UHD | +75–80 |
 | 1080p | +60 |
 | 720p | +20 |
