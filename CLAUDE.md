@@ -140,4 +140,58 @@ The file is shared with linuxvm. `sync_content_list_with_peer()` does two `rsync
 
 Auth (failures are silent apart from `--debug`):
 - **Mac → linuxvm:** no key file; ssh uses the 1Password agent via `~/.ssh/config`, so a sync can raise a 1Password approval prompt (`_SYNC_TIMEOUT` = 45 s allows for it).
-- **linuxvm → Mac:** dedicated passphrase-less key `~/.ssh/id_content_sync` on linuxvm. The Mac's `~/.ssh/authorized_keys` entry is `command="/Users/ben/bin/content-list-rsync",from="192.168.1.2",restrict`; that wrapper (not in this repo) only execs `/usr/bin/rsync --server [--sender] -<flags> . .content_list.json`. If rsync's server argv changes (e.g. new flags with spaces), the wrapper's regex will need updating.
+- **linuxvm → Mac:** dedicated passphrase-less key `~/.ssh/id_content_sync` on linuxvm. The Mac's `~/.ssh/authorized_keys` entry is `command="/Users/ben/bin/content-list-rsync",from="192.168.1.2",restrict`; that wrapper (deliberately not in this repo — see below) only execs `/usr/bin/rsync --server [--sender] -<flags> . .content_list.json`. If rsync's server argv changes (e.g. new flags with spaces), the wrapper's regex will need updating.
+
+### Recreating the linuxvm → Mac sync access
+
+The wrapper lives only at `~/bin/content-list-rsync` on the Mac. It is kept out of this repo, and must be a real file rather than a symlink into it, because the repo sits in OneDrive's CloudStorage folder, which sshd may be blocked from reading. To rebuild from scratch:
+
+**1. On linuxvm** — create the key (skip if `~/.ssh/id_content_sync` exists) and trust the Mac's host key:
+
+```bash
+ssh-keygen -t ed25519 -N "" -C content-list-sync@linuxvm -f ~/.ssh/id_content_sync
+ssh-keyscan -t ed25519 Ben.local >> ~/.ssh/known_hosts
+```
+
+Before trusting it, check the scanned fingerprint (`ssh-keygen -lf <(ssh-keyscan -t ed25519 Ben.local)`) matches `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run on the Mac.
+
+**2. On the Mac** — Remote Login must be on (System Settings → General → Sharing). Create `~/bin/content-list-rsync` with exactly this content, then `chmod 755 ~/bin/content-list-rsync`:
+
+```sh
+#!/bin/sh
+# Forced command for linuxvm's content-list sync key (~/.ssh/authorized_keys).
+# Allows only rsync of ~/.content_list.json in either direction - the two
+# commands get_content.py's sync_content_list_with_peer() sends from linuxvm.
+set -f
+cmd=$SSH_ORIGINAL_COMMAND
+if [ "$(printf '%s' "$cmd" | wc -l)" -eq 0 ] &&
+   printf '%s\n' "$cmd" | grep -Eqx 'rsync --server( --sender)? -[A-Za-z.]+ \. \.content_list\.json'; then
+    set -- $cmd
+    shift
+    exec /usr/bin/rsync "$@"
+fi
+echo "content-list-rsync: command not allowed: $cmd" >&2
+exit 1
+```
+
+**3. On the Mac** — append to `~/.ssh/authorized_keys`, substituting linuxvm's `~/.ssh/id_content_sync.pub` and linuxvm's LAN IP for `from=`:
+
+```
+command="/Users/ben/bin/content-list-rsync",from="192.168.1.2",restrict ssh-ed25519 AAAA… content-list-sync@linuxvm
+```
+
+**4. Verify from linuxvm** — the first command should succeed; the other two must print `content-list-rsync: command not allowed`:
+
+```bash
+S="ssh -i ~/.ssh/id_content_sync -o IdentitiesOnly=yes -o BatchMode=yes"
+rsync -au -e "$S" ben@Ben.local:.content_list.json /tmp/mac_content_list.json
+$S ben@Ben.local id
+rsync -a -e "$S" ben@Ben.local:.ssh/authorized_keys /tmp/x
+```
+
+If rsync on either side is upgraded and the sync starts failing, see what it sends with a fake ssh and adjust the wrapper's regex:
+
+```bash
+printf '#!/bin/sh\nshift; echo "$*" >&2; exit 1\n' > /tmp/fakessh && chmod +x /tmp/fakessh
+rsync -au -e /tmp/fakessh ~/.content_list.json ben@Ben.local:.content_list.json
+```
