@@ -79,6 +79,14 @@ FOREIGN_WORDS = frozenset({
     "spanish", "esp", "spa", "latino", "swesub", "nordic", "rus", "ukr",
 })
 FOREIGN_PENALTY = 40
+# "AI upscale" releases are SD/HD blown up to 2160p+: fake 4K, dropped.
+UPSCALE_WORDS = frozenset({"upscale", "upscaled", "upscaling"})
+# Dynamic range, for TVs that can show it (the target TV does Dolby Vision):
+# DV beats plain HDR10/HDR10+, which beats SDR at the same resolution.
+DOLBY_VISION_SCORE = 20
+HDR_SCORE = 10
+_DV_WORDS = frozenset({"dv", "dovi"})
+_HDR_WORDS = frozenset({"hdr", "hdr10", "hdr10plus"})
 RESOLUTION_SCORES = {
     "2160p": 80, "4k": 75, "uhd": 70,
     "1080p": 60,
@@ -115,7 +123,7 @@ OVERCOMPRESSED_PENALTY = 40
 # (remuxes). 4K needs roughly 3x the bits of 1080p.
 MOVIE_SIZE_GB = {
     "2160p": (6, 18, 30),
-    "other": (2, 6, 10),
+    "other": (2, 6, 16),   # untouched 1080p WEB-DLs run 10-15 GB; remuxes 25+
 }
 
 _GB = 1024 ** 3
@@ -289,11 +297,22 @@ def _words(text: str) -> str:
     return " " + " ".join(re.findall(r"[a-z0-9]+", text)) + " "
 
 
+# Site/tracker tags some uploaders put before the title: "[TGx] ",
+# "www.Torrenting.com - ", "【site】".
+_NAME_PREFIX_RE = re.compile(
+    r"^\s*(?:\[[^\]]*\]|【[^】]*】|www\.\S+|[a-z0-9-]+\.(?:com|org|net|to|io|cc|me))\s*[-–:|]*\s*",
+    re.IGNORECASE,
+)
+
+
 def title_matches(name: str, query: str) -> bool:
-    """True if `query`'s words appear in `name` as a consecutive phrase of
-    whole words. Release names lead with the title, and anything looser lets
+    """True if `name` starts with `query`'s words (whole words, ignoring case
+    and punctuation, after any leading site tag). Release names lead with the
+    title; matching anywhere let "Runner 2026" pick "The Runner 2026" and
     "Toy Story 5" match "Toy Story 4 ... 5.1"."""
-    return _words(query) in _words(name)
+    while (stripped := _NAME_PREFIX_RE.sub("", name, count=1)) != name:
+        name = stripped
+    return _words(name).startswith(_words(query))
 
 
 def search_torrents(query: str, sort: int = 3, category: int = 200) -> list[dict]:
@@ -495,7 +514,7 @@ def score_torrent(
     if not is_tv and EPISODE_RE.search(torrent["name"]):
         return None
     words = set(_words(torrent["name"]).split())
-    if words & CINEMA_RECORDING_WORDS:
+    if words & (CINEMA_RECORDING_WORDS | UPSCALE_WORDS):
         return None
     name = re.sub(r"[._]", " ", torrent["name"].lower())
     seeders = torrent.get("seeders", 0)
@@ -510,6 +529,10 @@ def score_torrent(
         score += _first_match(name, _AUDIO_PATTERNS)
     if words & FOREIGN_WORDS:
         score -= FOREIGN_PENALTY
+    if words & _DV_WORDS or " dolby vision " in _words(torrent["name"]):
+        score += DOLBY_VISION_SCORE
+    elif words & _HDR_WORDS:
+        score += HDR_SCORE
 
     size = torrent.get("size", 0)
     floor = _bitrate_floor(name)

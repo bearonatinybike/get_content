@@ -64,6 +64,8 @@ Each torrent gets a score before being offered:
 | Source: WEBRip, or WEB-DL re-encoded (x264/x265 tag) | +10 |
 | Source: HDTV / DCPRip | +5 |
 | Foreign or multi-language (ITA, MULTi, Dual, Hindi, …) | −40 |
+| Dolby Vision | +20 |
+| HDR / HDR10 / HDR10+ (without DV) | +10 |
 | Bitrate below the floor for its resolution (TV, needs TVMaze runtime) | −40 |
 | 2160p / 4K / UHD | +75–80 |
 | 1080p | +60 |
@@ -78,11 +80,11 @@ Each torrent gets a score before being offered:
 | Trusted uploader (context-aware) | +30 |
 | Movie size 2–6 GB (4K: 6–18 GB), then flat to the cap | up to +40 |
 
-Results are filtered to only those whose names contain the search query as a phrase (ignoring punctuation and case), so searching "Project Hail Mary" won't surface "The Project" or "Hail Caesar".
+Results are filtered to only those whose names start with the search query (ignoring punctuation and case), so searching "Runner 2026" won't surface "The Runner 2026", and searching "Project Hail Mary" won't surface "The Project" or "Hail Caesar".
 
-Cinema recordings (CAM, Telesync, HDTS, …) are never offered.
+Cinema recordings (CAM, Telesync, HDTS, …) and "AI upscale" fake-4K releases are never offered.
 
-For TV, only HD results (1080p+) are shown per episode. 720p is a fallback with a warning. For movies, results over 10 GB (30 GB for 4K) — i.e. remuxes — and results with no seeders are excluded.
+For TV, only HD results (1080p+) are shown per episode. 720p is a fallback with a warning. For movies, results over 16 GB (30 GB for 4K) — i.e. remuxes — and results with no seeders are excluded.
 
 ## Transmission
 

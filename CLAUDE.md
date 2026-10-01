@@ -102,12 +102,14 @@ RESOLUTION_SCORES = {2160p: 80, 4k: 75, uhd: 70, 1080p: 60, 720p: 20}
 AUDIO_SCORES      = {atmos/truehd: 30, dts-hd ma/dts:x: 25, dts-hd: 20,
                      eac3/ddp/dd+: 15, dts: 10, aac/ac3: 5}            # movies only
 foreign           = −40 for any FOREIGN_WORDS (ita, multi, dual, hindi, vff, nordic, …)
+dynamic range     = Dolby Vision (dv/dovi/"dolby vision") +20, else HDR/HDR10/HDR10+ +10
+upscales          = dropped: any UPSCALE_WORDS ("AI upscale" fake 4K)
 cinema recordings = dropped: any CINEMA_RECORDING_WORDS (cam, ts, hdts, telesync, tc, …)
 seeder_bonus      = min(50, log(seeders+1) * 16)   # SEEDER_CAP / SEEDER_WEIGHT; cap at ~20 seeds
 zero_seeders      = movies dropped; TV kept (fresh uploads can show 0 before counts refresh)
 trusted_uploader  = +30 (TV: TvTeam/EZTV; movies: YTS variants/mkvCinemas/Pahe.in/FitGirl)
 movie_size_bonus  = linear 0→+40 then flat, per MOVIE_SIZE_GB: 2160p 6→18 GB, else 2→6 GB
-movie_size_cap    = 2160p > 30 GB, else > 10 GB excluded (remuxes)
+movie_size_cap    = 2160p > 30 GB, else > 16 GB excluded (remuxes; untouched 1080p WEB-DLs run 10–15 GB)
 overcompressed    = −40 when size / TVMaze runtime is under MIN_MBPS for the resolution
                     (1080p: HEVC 1.8 / H.264 3.0 Mbit/s; 720p 0.9/1.5; 2160p 6/12)
 ties              = broken by seeder count (rank_key)
@@ -129,7 +131,7 @@ Key design decisions:
 
 ## Title relevance filter
 
-`title_matches()`: the query's words must appear in the name as a consecutive phrase of whole words, after both are lower-cased, stripped of straight and curly apostrophes, and split on any other punctuation (so `Spider-Man` matches `Spider.Man`, `Grey’s` matches `Greys`). Looser matching was wrong: as substrings or scattered words, "Toy Story 5" matched "Toy Story 4 … 5.1". Release names lead with the title, so the phrase is always there for a real match. `clean_query` (for the search URL) likewise strips curly apostrophes — otherwise `Grey’s` becomes `Grey s`.
+`title_matches()`: the name must *start with* the query's words (after stripping a leading site tag like `[TGx]` or `www.site.org -`), compared as whole words after both are lower-cased, stripped of straight and curly apostrophes, and split on any other punctuation (so `Spider-Man` matches `Spider.Man`, `Grey’s` matches `Greys`). Looser matching was wrong: as substrings or scattered words, "Toy Story 5" matched "Toy Story 4 … 5.1"; as a phrase anywhere, "Runner 2026" matched "The Runner 2026" (a different film) and "Dune" matched "Car S O S … VW Dune Buggy". Release names lead with the title, so a real match always starts with it. `clean_query` (for the search URL) likewise strips curly apostrophes — otherwise `Grey’s` becomes `Grey s`.
 
 ## Fake-release detection
 

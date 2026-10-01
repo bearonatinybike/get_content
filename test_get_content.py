@@ -122,7 +122,7 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(at(4) - base, 20)
         self.assertEqual(at(6) - base, 40)
         self.assertEqual(at(8) - base, 40)
-        self.assertIsNone(at(11))
+        self.assertIsNone(at(17))
 
     def test_seeder_bonus(self):
         seeds = lambda n: self.score("Show", seeders=n)
@@ -141,7 +141,8 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(at("Movie 2160p", 12) - base, 20)
         self.assertEqual(at("Movie 2160p", 18.3) - base, 40)
         self.assertIsNone(at("Movie 2160p", 31))
-        self.assertIsNone(at("Movie 1080p", 11))
+        self.assertIsNotNone(at("Movie 1080p", 11.8))   # untouched 1080p WEB-DL
+        self.assertIsNone(at("Movie 1080p", 17))
 
     def test_title_whole_words(self):
         self.assertFalse(gc.title_matches("Toy Story 4 2019 1080p BluRay HEVC x265 5.1-SUBS", "Toy Story 5"))
@@ -150,6 +151,12 @@ class ScoringTests(unittest.TestCase):
         self.assertTrue(gc.title_matches("Greys.Anatomy.S21E03", "Grey\u2019s Anatomy"))
         self.assertTrue(gc.title_matches("Bob's Burgers S16E01", "Bob's Burgers"))
         self.assertFalse(gc.title_matches("Dunes.2020.1080p", "Dune"))
+        self.assertFalse(gc.title_matches("The Runner 2026 1080p AMZN WEB-DL DDP5 1 Atmos H 264-FLUX", "Runner 2026"))
+        self.assertTrue(gc.title_matches("Runner.2026.1080p.AMZN.WEB-DL.DDP5.1.H264.MP4-BTM", "Runner 2026"))
+        self.assertTrue(gc.title_matches("Runner (2026) [1080p] [WEBRip] [5.1]", "Runner 2026"))
+        self.assertFalse(gc.title_matches("Car S O S S13E03 VW Dune Buggy 1080p", "Dune"))
+        self.assertTrue(gc.title_matches("[TGx] Runner.2026.1080p.WEB", "Runner 2026"))
+        self.assertTrue(gc.title_matches("www.Torrenting.com - Runner.2026.1080p", "Runner 2026"))
 
     def test_movie_mode_rejects_episodes(self):
         self.assertIsNone(self.score("Show.S01E01.1080p", is_tv=False))
@@ -177,6 +184,20 @@ class ScoringTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIsNone(self.score(name, seeders=10, is_tv=False))
         self.assertIsNotNone(self.score("Tsunami.2004.1080p", seeders=10, is_tv=False))
+
+    def test_dynamic_range(self):
+        base = self.score("Movie.2026.2160p.WEB-DL.H265", is_tv=False, seeders=1)
+        dr = lambda tag: self.score(f"Movie.2026.2160p.WEB-DL.{tag}.H265", is_tv=False, seeders=1) - base
+        self.assertEqual(dr("DV.HDR10+"), gc.DOLBY_VISION_SCORE)
+        self.assertEqual(dr("DoVi"), gc.DOLBY_VISION_SCORE)
+        self.assertEqual(dr("Dolby.Vision"), gc.DOLBY_VISION_SCORE)
+        self.assertEqual(dr("HDR10Plus"), gc.HDR_SCORE)
+        self.assertEqual(dr("HDR"), gc.HDR_SCORE)
+        self.assertEqual(self.score("Show.S01E01.DVDRip"), self.score("Show.S01E01"))
+
+    def test_upscales_dropped(self):
+        self.assertIsNone(self.score("South Park - S29E02 - 2160p HDR Ai Upscale 5.1 MKV -Mesc"))
+        self.assertIsNone(self.score("Movie 2026 4K Upscaled", is_tv=False, seeders=5))
 
     def test_foreign_penalty(self):
         base = self.score("Show.S01E01.1080p.WEB-DL.H265-TBK")
