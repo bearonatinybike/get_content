@@ -37,13 +37,6 @@ Adding one would stop this file loading unless it contains an `@AGENTS.md` impor
 Not in the repo: `~/bin/content-list-rsync` on the Mac (see *Recreating the linuxvm → Mac
 sync access*).
 
-## Related projects
-
-- **tvcal** (`~/OneDrive/Dev/tvcal`, deployed at `~/dev/tvcal` on linuxvm) — TV calendar
-  that also writes `~/.content_list.json` (shows as `{name, tvmaze_id}`). It is a calendar
-  only; acquisition stays here. Its own AGENTS.md describes the shared list.
-- **organise_media** — sorts finished downloads into `~/media/{Movies,TV}` for Jellyfin.
-
 ## Rules
 
 - **Stdlib only.** No `pip install`; the script must run on a stock Python 3.12+ (linuxvm
@@ -64,9 +57,9 @@ sync access*).
   `_ep_sort_key()`.
 - **Keep "show not found" and "nothing aired" distinct** (`None` vs `{}`) — see TVMaze.
 - **Content-list writes stay atomic** (`save_content_list()`: temp file + `os.replace`).
-  tvcal and rsync read the same file.
-- **TVMaze is rate limited** (~20 requests / 10 s per IP), shared with tvcal on linuxvm.
-  get_content makes at most two calls per show; keep it that way.
+  Other programs on linuxvm read and write `~/.content_list.json` too, as does the rsync.
+- **TVMaze is rate limited** (~20 requests / 10 s per IP), shared with anything else on
+  the same host that calls it. get_content makes at most two calls per show; keep it that way.
 - **The sync wrapper is not committed** and must not be symlinked into this OneDrive repo.
 
 ## What a good pick is
@@ -355,8 +348,8 @@ end of the run.
 }
 ```
 
-Shows are strings or `{name, tvmaze_id}` (tvcal writes the latter; ids skip the TVMaze
-name search). The old plain-text format is auto-migrated. Writes are atomic and keep the
+Shows are strings or `{name, tvmaze_id}` (other writers on linuxvm use the latter; ids
+skip the TVMaze name search). The old plain-text format is auto-migrated. Writes are atomic and keep the
 file's mode.
 
 ### Download history (`last_downloaded`)
@@ -375,7 +368,7 @@ Nothing is written until the end of the run, so Ctrl+C never records unsent epis
 The file is shared between the Mac and linuxvm. `sync_content_list_with_peer()` does two
 `rsync -au` passes (newer mtime wins) at the start of list mode; `record_progress()`
 syncs and re-reads before merging its updates (max per show), saves, and syncs again, so
-concurrent tvcal edits aren't clobbered. Peer host is hardcoded in `_peer_host()`
+edits made on the other machine during a run aren't clobbered. Peer host is hardcoded in `_peer_host()`
 (`ben@Ben.local` from linuxvm, `ben@linuxvm.local` otherwise). Failures are silent except
 under `--debug`.
 
